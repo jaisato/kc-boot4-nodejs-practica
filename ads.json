@@ -1,0 +1,34 @@
+{
+    "ads": [
+        {
+            "name": "bici",
+            "price": 540.59,
+            "on_sale": true,
+            "photo": "bici.jpg",
+            "tags": [
+                "lifestyle",
+                "motor"
+            ]
+        },
+        {
+            "name": "iPhone",
+            "price": 290.99,
+            "on_sale" : true,
+            "photo": "iphone.png",
+            "tags": [
+                "lifestyle",
+                "mobile"
+            ]
+        },
+        {
+            "name": "MacBook Pro",
+            "price": 1599.95,
+            "on_sale": false,
+            "photo": "macbook.jpg",
+            "tags" : [
+                "lifestyle",
+                "work"
+            ]
+        }
+    ]
+}
