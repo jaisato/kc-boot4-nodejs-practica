@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+var bcrypt = require('bcrypt');
+const salt = "$2a$10$GX7y..W8hpSCD5KOIAHemO";
+
 var mongoose = require('mongoose');
 
 // Mongo Database Connection
@@ -24,12 +27,16 @@ var Ad = mongoose.model('Ad'),
 Ad.remove(null, function (err) {
     if (err) {
         console.log(err);
+    } else {
+        console.log('All ads deleted!');
     }
 });
 
 User.remove(null, function (err) {
     if (err) {
         console.log(err);
+    } else {
+        console.log('All users deleted!');
     }
 });
 
@@ -37,7 +44,7 @@ User.remove(null, function (err) {
 var user = new User({
     name: 'user 1',
     email: 'user1@gmail.com',
-    password: '1234'
+    password: bcrypt.hashSync('1234', salt)
 });
 
 user.save(function (err, userCreated) {
