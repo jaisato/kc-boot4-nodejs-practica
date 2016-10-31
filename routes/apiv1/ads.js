@@ -13,15 +13,16 @@ router.use(jwtAuth.checkToken());
 
 /* GET ads listing. */
 router.get('/', function(req, res, next) {
-  var name = req.query.name;
-  var onSale = Boolean(req.query.onsale) || null;
-
   var sort = req.query.sort || null;
   var limit = parseInt(req.query.limit) || null;
   var skip = parseInt(req.query.skip) || 0;
-  var fields = req.query.fields || null;
+
+  var fields = buildFields(req.query.fields);
 
   var filter = {};
+
+  var name = req.query.name;
+  var onSale = req.query.onsale;
 
   if (typeof name !== 'undefined') {
     filter.name = new RegExp("^"+ name, 'i');
@@ -37,14 +38,16 @@ router.get('/', function(req, res, next) {
     filter.price = priceFilter;
   }
 
-  if (onSale !== null) {
-    filter.on_sale = onSale;
+  if (typeof onSale !== 'undefined' && onSale.length > 0) {
+    filter.on_sale = checkTypeFilter(onSale, next);
   }
 
   Ad.list(filter, sort, limit, skip, fields)
       .then(function(ads) {
         ads.forEach(function (ad) {
-          ad.photo = req.protocol + '://' + req.get('host') + '/images/ads/' + ad.photo;
+          if (ad.photo) {
+            ad.photo = req.protocol + '://' + req.get('host') + '/images/ads/' + ad.photo;
+          }
         });
 
         res.json({success: true, ads: ads});
@@ -98,6 +101,38 @@ function checkTags(tags) {
   }
 
   return filterTags;
+}
+
+/**
+ * Builds the fields well formatted.
+ * @param fields
+ * @returns {*}
+ */
+function buildFields(fields) {
+  if (typeof fields !== 'undefined' && fields.length > 0) {
+    fields = fields.replace(/[ ,]+/, " ");
+  } else {
+    fields = null;
+  }
+
+  return fields;
+}
+
+/**
+ * Checks the Ad type filter.
+ * @param onSale
+ * @param next
+ * @returns {boolean}
+ */
+function checkTypeFilter(onSale, next) {
+  if (onSale == '1' || onSale == 'true') {
+    return true;
+  }
+  if (onSale == '0' || onSale == 'false') {
+    return false;
+  }
+
+  next(new APIError(400, "The value Ad type 'onsale' must be: 1 (or true) and 0 (or false)."))
 }
 
 module.exports = router;
