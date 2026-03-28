@@ -31,3 +31,6 @@ npm-debug.log
 
 # webstorm
 .idea
+
+# Environment variables
+.env
