@@ -11,11 +11,10 @@ var bcrypt = require('bcrypt');
 
 var APIError = require('../../lib/APIError');
 
-const salt = "$2a$10$GX7y..W8hpSCD5KOIAHemO";
-
 /* GET authenticate users */
 router.post('/login', function(req, res, next) {
   // search user
+  var salt = bcrypt.genSaltSync(10);
   bcrypt.hash(req.body.password, salt, function (err, passwordHash) {
     if (err) {
       return next(err);
@@ -45,6 +44,7 @@ router.post('/login', function(req, res, next) {
 
 /* POST register users */
 router.post('/signup', function(req, res, next) {
+  var salt = bcrypt.genSaltSync(10);
   bcrypt.hash(req.body.password, salt, function (err, passwordHash) {
     if (err) {
       return next(err);
@@ -69,9 +69,12 @@ router.post('/signup', function(req, res, next) {
         return next(err);
       }
 
+      var userResponse = userCreated.toObject();
+      delete userResponse.password;
+
       res.json({
         success: true,
-        data: userCreated
+        data: userResponse
       });
     })
   });

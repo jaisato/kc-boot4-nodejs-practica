@@ -25,6 +25,7 @@ router.get('/', function(req, res, next) {
   var onSale = req.query.onsale;
 
   if (typeof name !== 'undefined') {
+    name = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     filter.name = new RegExp("^"+ name, 'i');
   }
 
