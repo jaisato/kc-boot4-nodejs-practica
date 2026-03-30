@@ -8,6 +8,15 @@ var jwtAuth = require('../../lib/jwtAuth');
 
 var APIError = require('../../lib/APIError');
 
+/**
+ * Escapes special regex characters in a string to prevent ReDoS / injection.
+ * @param {string} str
+ * @returns {string}
+ */
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // Using JWT Authentication
 router.use(jwtAuth.checkToken());
 
@@ -25,7 +34,7 @@ router.get('/', function(req, res, next) {
   var onSale = req.query.onsale;
 
   if (typeof name !== 'undefined') {
-    filter.name = new RegExp("^"+ name, 'i');
+    filter.name = new RegExp("^"+ escapeRegExp(name), 'i');
   }
 
   var filterTags = checkTags(req.query.tags);
