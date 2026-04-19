@@ -11,6 +11,15 @@ var APIError = require('../../lib/APIError');
 // Using JWT Authentication
 router.use(jwtAuth.checkToken());
 
+/**
+ * Escapes special regex characters in a string to prevent regex injection.
+ * @param {string} str - The string to escape
+ * @returns {string} The escaped string safe for use in RegExp
+ */
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /* GET ads listing. */
 router.get('/', function(req, res, next) {
   var sort = req.query.sort || null;
@@ -25,7 +34,7 @@ router.get('/', function(req, res, next) {
   var onSale = req.query.onsale;
 
   if (typeof name !== 'undefined') {
-    filter.name = new RegExp("^"+ name, 'i');
+    filter.name = new RegExp("^"+ escapeRegex(name), 'i');
   }
 
   var filterTags = checkTags(req.query.tags);
