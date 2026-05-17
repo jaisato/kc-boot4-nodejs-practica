@@ -4,6 +4,8 @@ var favicon = require('serve-favicon');
 var logger = require('morgan');
 var cookieParser = require('cookie-parser');
 var bodyParser = require('body-parser');
+var helmet = require('helmet');
+var rateLimit = require('express-rate-limit');
 
 // database connections
 require('./lib/mongoConnection');
@@ -20,6 +22,19 @@ var tags = require('./routes/apiv1/tags');
 
 var app = express();
 
+// SECURITY FIX: Add helmet for HTTP security headers (XSS, clickjacking, MIME sniffing, etc.)
+app.use(helmet());
+
+// SECURITY FIX: Add rate limiting to prevent brute force and DoS attacks
+var apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // limit each IP to 100 requests per windowMs
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, error: 'Too many requests, please try again later.' }
+});
+app.use('/apiv1/', apiLimiter);
+
 // view engine setup
 app.set('views', path.join(__dirname, 'views'));
 app.set('view engine', 'ejs');
@@ -27,8 +42,8 @@ app.set('view engine', 'ejs');
 // uncomment after placing your favicon in /public
 //app.use(favicon(path.join(__dirname, 'public', 'favicon.ico')));
 app.use(logger('dev'));
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: false }));
+app.use(bodyParser.json({ limit: '1mb' }));
+app.use(bodyParser.urlencoded({ extended: false, limit: '1mb' }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -53,7 +68,7 @@ if (app.get('env') === 'development') {
         res.status(err.status || 500);
 
         if (isAPI(req)) {
-            res.json({success: false, error: err});
+            res.json({success: false, error: { message: err.message, status: err.status }});
         } else {
             res.render('error', {
                 message: err.message,
@@ -63,13 +78,12 @@ if (app.get('env') === 'development') {
     });
 }
 
-// production error handler
-// no stacktraces leaked to user
+// SECURITY FIX: Production error handler should not leak internal error details
 app.use(function(err, req, res, next) {
     res.status(err.status || 500);
 
     if (isAPI(req)) {
-        res.json({success: false, error: err});
+        res.json({success: false, error: { message: err.message || 'Internal Server Error' }});
     } else {
         res.render('error', {
             message: err.message,

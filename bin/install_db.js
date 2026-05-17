@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 var bcrypt = require('bcrypt');
-const salt = "$2a$10$GX7y..W8hpSCD5KOIAHemO";
+// SECURITY FIX: Use auto-generated salt with proper cost factor
+const SALT_ROUNDS = 12;
 
 var mongoose = require('mongoose');
 
@@ -14,7 +15,9 @@ db.once('open', function () {
     console.log('Conectado a mongoDB');
 });
 
-mongoose.connect('mongodb://localhost:27017/nodepop');
+// SECURITY FIX: Use environment variable for MongoDB connection string
+var mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/nodepop';
+mongoose.connect(mongoURI);
 
 // Loading models
 require('./../models/Ad');
@@ -24,7 +27,7 @@ require('./../models/User');
 var Ad = mongoose.model('Ad'),
     User = mongoose.model('User');
 
-Ad.remove(null, function (err) {
+Ad.deleteMany({}, function (err) {
     if (err) {
         console.log(err);
     } else {
@@ -32,7 +35,7 @@ Ad.remove(null, function (err) {
     }
 });
 
-User.remove(null, function (err) {
+User.deleteMany({}, function (err) {
     if (err) {
         console.log(err);
     } else {
@@ -41,10 +44,11 @@ User.remove(null, function (err) {
 });
 
 // Add a new user
+// SECURITY FIX: Use proper bcrypt salt generation and a stronger default password
 var user = new User({
     name: 'user 1',
     email: 'user1@gmail.com',
-    password: bcrypt.hashSync('1234', salt)
+    password: bcrypt.hashSync('changeme123!', SALT_ROUNDS)
 });
 
 user.save(function (err, userCreated) {
