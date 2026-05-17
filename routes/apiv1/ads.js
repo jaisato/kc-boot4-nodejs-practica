@@ -3,6 +3,7 @@ var router = express.Router();
 
 var mongoose = require('mongoose');
 var Ad = mongoose.model('Ad');
+var validator = require('validator');
 
 var jwtAuth = require('../../lib/jwtAuth');
 
@@ -11,11 +12,23 @@ var APIError = require('../../lib/APIError');
 // Using JWT Authentication
 router.use(jwtAuth.checkToken());
 
+/**
+ * Escapes special RegExp characters from user input to prevent ReDoS attacks.
+ */
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /* GET ads listing. */
 router.get('/', function(req, res, next) {
   var sort = req.query.sort || null;
   var limit = parseInt(req.query.limit) || null;
   var skip = parseInt(req.query.skip) || 0;
+
+  // SECURITY FIX: Cap the limit to prevent excessive data retrieval
+  if (limit && limit > 100) {
+    limit = 100;
+  }
 
   var fields = buildFields(req.query.fields);
 
@@ -25,7 +38,8 @@ router.get('/', function(req, res, next) {
   var onSale = req.query.onsale;
 
   if (typeof name !== 'undefined') {
-    filter.name = new RegExp("^"+ name, 'i');
+    // SECURITY FIX: Escape user input before using in RegExp to prevent ReDoS
+    filter.name = new RegExp("^"+ escapeRegExp(name), 'i');
   }
 
   var filterTags = checkTags(req.query.tags);
