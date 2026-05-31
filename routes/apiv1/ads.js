@@ -25,7 +25,9 @@ router.get('/', function(req, res, next) {
   var onSale = req.query.onsale;
 
   if (typeof name !== 'undefined') {
-    filter.name = new RegExp("^"+ name, 'i');
+    // Escape special regex characters to prevent ReDoS / regex injection
+    var escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    filter.name = new RegExp("^"+ escapedName, 'i');
   }
 
   var filterTags = checkTags(req.query.tags);
