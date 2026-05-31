@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 var bcrypt = require('bcrypt');
-const salt = "$2a$10$GX7y..W8hpSCD5KOIAHemO";
+const SALT_ROUNDS = 10;
 
 var mongoose = require('mongoose');
 
@@ -44,7 +44,7 @@ User.remove(null, function (err) {
 var user = new User({
     name: 'user 1',
     email: 'user1@gmail.com',
-    password: bcrypt.hashSync('1234', salt)
+    password: bcrypt.hashSync('1234', SALT_ROUNDS)
 });
 
 user.save(function (err, userCreated) {

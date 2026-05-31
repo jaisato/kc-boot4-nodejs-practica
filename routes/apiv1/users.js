@@ -11,31 +11,42 @@ var bcrypt = require('bcrypt');
 
 var APIError = require('../../lib/APIError');
 
-const salt = "$2a$10$GX7y..W8hpSCD5KOIAHemO";
+// Use bcrypt.genSalt instead of hardcoded salt
+const SALT_ROUNDS = 10;
 
 /* GET authenticate users */
 router.post('/login', function(req, res, next) {
-  // search user
-  bcrypt.hash(req.body.password, salt, function (err, passwordHash) {
+
+  if (!req.body.email || !req.body.password) {
+    return next(new APIError(400, 'Email and password are required'));
+  }
+
+  var email = req.body.email;
+
+  User.findOne({email: email}, function (err, user) {
     if (err) {
       return next(err);
     }
 
-    var email = req.body.email;
-    var user = User.findOne({email: email, password: passwordHash}, function (err, users) {
+    if (!user) {
+      var error = new APIError(401, 'Invalid credentials');
+      return next(error);
+    }
+
+    // Compare password using bcrypt.compare instead of hashing and matching
+    bcrypt.compare(req.body.password, user.password, function(err, isMatch) {
       if (err) {
         return next(err);
       }
 
-      if (!users) {
-        var error = new APIError(404, 'User not found!');
-        return next(error);
+      if (!isMatch) {
+        return next(new APIError(401, 'Invalid credentials'));
       }
 
       var token = jwt.sign(
-          {id: users._id},
+          {id: user._id},
           jwtAuth.TOKEN_SECRET,
-          {expiresIn: '24 hours'}
+          {expiresIn: '24h'}
       );
 
       res.json({success: true, token: token});
@@ -45,7 +56,12 @@ router.post('/login', function(req, res, next) {
 
 /* POST register users */
 router.post('/signup', function(req, res, next) {
-  bcrypt.hash(req.body.password, salt, function (err, passwordHash) {
+
+  if (!req.body.name || !req.body.email || !req.body.password) {
+    return next(new APIError(400, 'Name, email, and password are required'));
+  }
+
+  bcrypt.hash(req.body.password, SALT_ROUNDS, function (err, passwordHash) {
     if (err) {
       return next(err);
     }
@@ -58,22 +74,21 @@ router.post('/signup', function(req, res, next) {
 
     var newUser = new User(userFields);
 
-    newUser.validate(function (err) {
-      if (err) {
-        return next(err);
-      }
-    });
-
     newUser.save(function (err, userCreated) {
       if (err) {
         return next(err);
       }
 
+      // Do not return the password hash in the response
       res.json({
         success: true,
-        data: userCreated
+        data: {
+          name: userCreated.name,
+          email: userCreated.email,
+          _id: userCreated._id
+        }
       });
-    })
+    });
   });
 });
 
