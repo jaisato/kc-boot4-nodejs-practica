@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 var bcrypt = require('bcrypt');
-const SALT_ROUNDS = 10;
+const BCRYPT_SALT_ROUNDS = 10;
 
 var mongoose = require('mongoose');
 
@@ -14,7 +14,8 @@ db.once('open', function () {
     console.log('Conectado a mongoDB');
 });
 
-mongoose.connect('mongodb://localhost:27017/nodepop');
+var mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/nodepop';
+mongoose.connect(mongoUri);
 
 // Loading models
 require('./../models/Ad');
@@ -44,7 +45,7 @@ User.remove(null, function (err) {
 var user = new User({
     name: 'user 1',
     email: 'user1@gmail.com',
-    password: bcrypt.hashSync('1234', SALT_ROUNDS)
+    password: bcrypt.hashSync('1234', BCRYPT_SALT_ROUNDS)
 });
 
 user.save(function (err, userCreated) {

@@ -11,18 +11,17 @@ var bcrypt = require('bcrypt');
 
 var APIError = require('../../lib/APIError');
 
-// Use bcrypt.genSalt instead of hardcoded salt
-const SALT_ROUNDS = 10;
+const BCRYPT_SALT_ROUNDS = 10;
 
 /* GET authenticate users */
 router.post('/login', function(req, res, next) {
+  var email = req.body.email;
 
-  if (!req.body.email || !req.body.password) {
+  if (!email || !req.body.password) {
     return next(new APIError(400, 'Email and password are required'));
   }
 
-  var email = req.body.email;
-
+  // search user by email only, then compare password with bcrypt.compare
   User.findOne({email: email}, function (err, user) {
     if (err) {
       return next(err);
@@ -34,7 +33,7 @@ router.post('/login', function(req, res, next) {
     }
 
     // Compare password using bcrypt.compare instead of hashing and matching
-    bcrypt.compare(req.body.password, user.password, function(err, isMatch) {
+    bcrypt.compare(req.body.password, user.password, function (err, isMatch) {
       if (err) {
         return next(err);
       }
@@ -46,7 +45,7 @@ router.post('/login', function(req, res, next) {
       var token = jwt.sign(
           {id: user._id},
           jwtAuth.TOKEN_SECRET,
-          {expiresIn: '24h'}
+          {expiresIn: '2h'}
       );
 
       res.json({success: true, token: token});
@@ -56,12 +55,15 @@ router.post('/login', function(req, res, next) {
 
 /* POST register users */
 router.post('/signup', function(req, res, next) {
-
   if (!req.body.name || !req.body.email || !req.body.password) {
     return next(new APIError(400, 'Name, email, and password are required'));
   }
 
-  bcrypt.hash(req.body.password, SALT_ROUNDS, function (err, passwordHash) {
+  if (req.body.password.length < 8) {
+    return next(new APIError(400, 'Password must be at least 8 characters'));
+  }
+
+  bcrypt.hash(req.body.password, BCRYPT_SALT_ROUNDS, function (err, passwordHash) {
     if (err) {
       return next(err);
     }
@@ -79,7 +81,7 @@ router.post('/signup', function(req, res, next) {
         return next(err);
       }
 
-      // Do not return the password hash in the response
+      // Do not return password hash in response
       res.json({
         success: true,
         data: {

@@ -62,7 +62,7 @@ if (app.get('env') === 'development') {
         res.status(err.status || 500);
 
         if (isAPI(req)) {
-            res.json({success: false, error: err});
+            res.json({success: false, error: { message: err.message, status: err.status, stack: err.stack }});
         } else {
             res.render('error', {
                 message: err.message,
@@ -78,7 +78,7 @@ app.use(function(err, req, res, next) {
     res.status(err.status || 500);
 
     if (isAPI(req)) {
-        res.json({success: false, error: err});
+        res.json({success: false, error: { message: err.message, status: err.status }});
     } else {
         res.render('error', {
             message: err.message,

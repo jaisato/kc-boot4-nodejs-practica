@@ -31,3 +31,8 @@ npm-debug.log
 
 # webstorm
 .idea
+
+# Environment files
+.env
+.env.local
+.env.production
