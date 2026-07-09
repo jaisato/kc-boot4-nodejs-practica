@@ -7,16 +7,16 @@
     "installDB": "node ./bin/install_db.js"
   },
   "dependencies": {
-    "bcrypt": "^0.8.7",
-    "body-parser": "~1.15.1",
-    "cookie-parser": "~1.4.3",
-    "debug": "~2.2.0",
-    "ejs": "~2.4.1",
-    "express": "~4.13.4",
-    "jsonwebtoken": "^7.1.9",
+    "bcrypt": "^5.1.1",
+    "body-parser": "^1.20.3",
+    "cookie-parser": "^1.4.7",
+    "debug": "^4.4.0",
+    "ejs": "^2.7.4",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
     "mongoose": "^4.6.5",
-    "morgan": "~1.7.0",
+    "morgan": "^1.10.0",
     "nodemon": "^1.11.0",
-    "serve-favicon": "~2.3.0"
+    "serve-favicon": "^2.5.0"
   }
 }

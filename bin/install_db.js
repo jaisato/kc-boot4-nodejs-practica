@@ -14,7 +14,7 @@ db.once('open', function () {
     console.log('Conectado a mongoDB');
 });
 
-mongoose.connect('mongodb://localhost:27017/nodepop');
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/nodepop');
 
 // Loading models
 require('./../models/Ad');
