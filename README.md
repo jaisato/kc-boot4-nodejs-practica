@@ -2,6 +2,12 @@
 
 La presente es la documentación de la API Nodepop para la práctica del 2º Módulo del Bootcamp IV de KeepCoding.
 
+## Nota de seguridad
+
+- El antiguo secreto JWT que estaba hardcodeado en `lib/jwtAuth.js` sigue presente en el historial de git, por lo que está **comprometido**: cualquier token firmado con él puede ser falsificado. No debe reutilizarse nunca.
+- El secreto ahora se lee de la variable de entorno **`JWT_SECRET`** (obligatoria; la aplicación no arranca sin ella). La URL de MongoDB se puede configurar con **`MONGODB_URI`**. Ver `.env.example` (no subir nunca el fichero `.env` al repositorio).
+- Recomendación pendiente: migrar de mongoose 4 a mongoose 8 (implica cambios incompatibles, por eso no se ha actualizado aquí).
+
 ## Instalación
 Instalación de las dependencias de la práctica en Express.
 
