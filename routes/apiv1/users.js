@@ -21,7 +21,7 @@ router.post('/login', function(req, res, next) {
       return next(err);
     }
 
-    var email = req.body.email;
+    var email = String(req.body.email);
     var user = User.findOne({email: email, password: passwordHash}, function (err, users) {
       if (err) {
         return next(err);
