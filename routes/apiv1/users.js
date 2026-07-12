@@ -21,7 +21,9 @@ router.post('/login', function(req, res, next) {
       return next(err);
     }
 
-    var email = req.body.email;
+    // Force a string so query operators (e.g. {"$gt": ""}) can't be injected
+    // through the request body (NoSQL injection).
+    var email = String(req.body.email);
     var user = User.findOne({email: email, password: passwordHash}, function (err, users) {
       if (err) {
         return next(err);
