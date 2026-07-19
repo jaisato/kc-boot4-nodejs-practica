@@ -58,12 +58,10 @@ router.post('/signup', function(req, res, next) {
 
     var newUser = new User(userFields);
 
-    newUser.validate(function (err) {
-      if (err) {
-        return next(err);
-      }
-    });
-
+    // save() runs schema validation and reports any ValidationError via its
+    // callback, so a separate validate() call here is redundant and could
+    // invoke next(err) twice (once from validate, once from save) on invalid
+    // input, causing an "headers already sent" error.
     newUser.save(function (err, userCreated) {
       if (err) {
         return next(err);
