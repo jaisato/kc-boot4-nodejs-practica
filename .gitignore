@@ -31,3 +31,8 @@ npm-debug.log
 
 # webstorm
 .idea
+
+# Environment / secrets
+.env
+.env.*
+!.env.example

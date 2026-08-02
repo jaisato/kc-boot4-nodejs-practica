@@ -25,7 +25,7 @@ router.get('/', function(req, res, next) {
   var onSale = req.query.onsale;
 
   if (typeof name !== 'undefined') {
-    filter.name = new RegExp("^"+ name, 'i');
+    filter.name = new RegExp("^" + escapeRegExp(String(name)), 'i');
   }
 
   var filterTags = checkTags(req.query.tags);
@@ -34,12 +34,21 @@ router.get('/', function(req, res, next) {
   }
 
   var priceFilter = checkPrice(req.query.minprice, req.query.maxprice, next);
+  // checkPrice()/checkTypeFilter() call next(err) themselves on invalid
+  // input (which sends an error response); if that happened, stop here
+  // instead of also sending a second, successful response below.
+  if (res.headersSent) {
+    return;
+  }
   if (priceFilter !== null) {
     filter.price = priceFilter;
   }
 
   if (typeof onSale !== 'undefined' && onSale.length > 0) {
     filter.on_sale = checkTypeFilter(onSale, next);
+    if (res.headersSent) {
+      return;
+    }
   }
 
   Ad.list(filter, sort, limit, skip, fields)
@@ -53,6 +62,16 @@ router.get('/', function(req, res, next) {
         res.json({success: true, ads: ads});
       }).catch(next);
 });
+
+/**
+ * Escapes regex special characters so user-supplied search input can't be
+ * used to inject arbitrary regex syntax (regex-injection / ReDoS risk).
+ * @param str
+ * @returns {string}
+ */
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /**
  * Checks price filters.
