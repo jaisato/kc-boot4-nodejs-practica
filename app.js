@@ -69,7 +69,9 @@ app.use(function(err, req, res, next) {
     res.status(err.status || 500);
 
     if (isAPI(req)) {
-        res.json({success: false, error: err});
+        // Do not leak internal error details (e.g. stack traces) to API
+        // clients in production; only expose the message.
+        res.json({success: false, error: {message: err.message}});
     } else {
         res.render('error', {
             message: err.message,
