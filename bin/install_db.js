@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 var bcrypt = require('bcrypt');
-const salt = "$2a$10$GX7y..W8hpSCD5KOIAHemO";
-
+// bcrypt picks a fresh salt per hash when given a cost factor.
+const BCRYPT_ROUNDS = 10;
 var mongoose = require('mongoose');
 
 // Mongo Database Connection
@@ -44,7 +44,7 @@ User.remove(null, function (err) {
 var user = new User({
     name: 'user 1',
     email: 'user1@gmail.com',
-    password: bcrypt.hashSync('1234', salt)
+    password: bcrypt.hashSync('1234', BCRYPT_ROUNDS)
 });
 
 user.save(function (err, userCreated) {
