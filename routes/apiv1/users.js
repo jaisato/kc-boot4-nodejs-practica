@@ -27,6 +27,17 @@ const BCRYPT_ROUNDS = 10;
 const DUMMY_HASH = bcrypt.hashSync('user-does-not-exist', BCRYPT_ROUNDS);
 
 /**
+ * Hard cap on how many stored passwords one login request may check.
+ *
+ * The e-mail column is unique now, so in a healthy database this is always 1.
+ * The cap exists for collections created before that index, where duplicates
+ * may already sit: it keeps legacy accounts working without letting the number
+ * of bcrypt comparisons - and therefore the CPU cost of an unauthenticated
+ * request - be driven by the stored data.
+ */
+const MAX_LOGIN_CANDIDATES = 3;
+
+/**
  * Request bodies are JSON, so `{"email": {"$ne": null}}` arrives as an object
  * and Mongo treats it as an operator rather than a value. Every field that
  * reaches a query has to be a string first.
@@ -44,12 +55,10 @@ router.post('/login', function(req, res, next) {
     return next(new APIError(400, 'email and password are required.'));
   }
 
-  // Fetch every account with this e-mail. The schema puts no unique index on
-  // the column and /signup does not reject duplicates, so more than one row can
-  // share an address. The original query matched on e-mail *and* password hash,
-  // which happened to pick the right row; looking up a single arbitrary match
-  // would lock the other account out, so each candidate is checked in turn.
-  User.find({email: email}, function (err, users) {
+  // At most MAX_LOGIN_CANDIDATES accounts are considered. The address is unique
+  // going forward, so this is normally a single row; the limit bounds the work
+  // for collections that already contain duplicates from before the index.
+  User.find({email: email}).limit(MAX_LOGIN_CANDIDATES).exec(function (err, users) {
     if (err) {
       return next(err);
     }
@@ -105,9 +114,15 @@ router.post('/signup', function(req, res, next) {
       return next(err);
     }
 
+    var emailField = requireString(req.body.email);
+
+    if (!emailField) {
+      return next(new APIError(400, 'email is required.'));
+    }
+
     var userFields = {
       name: req.body.name,
-      email: req.body.email,
+      email: emailField,
       password: passwordHash
     };
 
@@ -123,6 +138,12 @@ router.post('/signup', function(req, res, next) {
 
       newUser.save(function (err, userCreated) {
         if (err) {
+          // The unique index rejects an address that is already registered.
+          // Answering 409 keeps the raw driver error out of the response.
+          if (err.code === 11000) {
+            return next(new APIError(409, 'That e-mail is already registered.'));
+          }
+
           return next(err);
         }
 
