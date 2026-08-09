@@ -73,3 +73,24 @@ Servicio para listar los tags registrados en el sistema. Este servicio **NO** re
 * **Parámetros:** *No se requiere de parámetros.*
 * **Resultado:** *objeto en formato JSON con el éxito de la petición (success) y los datos (tags).*
 
+
+## Security notice: rotate the JWT secret
+
+`lib/jwtAuth.js` used to carry the token-signing secret in plain text. Anyone
+with a copy of this repository could forge a token for any user id, so the old
+value must be considered compromised even though it is no longer in the source
+— it remains in the git history.
+
+The app now reads it from the environment and refuses to start without it:
+
+```bash
+export JWT_SECRET="$(openssl rand -hex 32)"
+npm start
+```
+
+Rotating the secret invalidates every token issued with the old one, which is
+the intended effect.
+
+Passwords are now hashed with a per-password bcrypt salt. Existing hashes keep
+working — bcrypt stores the salt inside the hash, so `bcrypt.compare()` verifies
+old and new records alike, and no migration is needed.
