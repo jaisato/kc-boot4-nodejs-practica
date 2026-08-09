@@ -71,6 +71,17 @@ router.post('/login', function(req, res, next) {
       });
     }
 
+    if (users.length === MAX_LOGIN_CANDIDATES) {
+      // Hitting the cap means the unique index is not in place, so an account
+      // beyond it can never authenticate. Say so instead of failing silently:
+      // the fix is `npm run migrate:unique-email`.
+      console.warn(
+        'login: %d accounts share an e-mail; the unique index is missing. ' +
+        'Run "npm run migrate:unique-email" - accounts past the cap cannot sign in.',
+        users.length
+      );
+    }
+
     var index = 0;
 
     (function tryNext() {

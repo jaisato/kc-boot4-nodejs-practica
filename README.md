@@ -94,3 +94,27 @@ the intended effect.
 Passwords are now hashed with a per-password bcrypt salt. Existing hashes keep
 working — bcrypt stores the salt inside the hash, so `bcrypt.compare()` verifies
 old and new records alike, and no migration is needed.
+
+## Migración obligatoria: índice único de email
+
+`models/User.js` declara `email` como único, pero eso sólo surte efecto en bases
+de datos nuevas. Una base creada por una versión anterior ya tiene un índice
+`email_1` **no único**, y MongoDB no lo redefine solo — `npm run installDB`
+tampoco, porque borra documentos y no índices.
+
+Mientras ese índice siga sin ser único:
+
+- `/signup` sigue aceptando direcciones repetidas.
+- El login sólo comprueba la contraseña contra un número acotado de cuentas
+  (para que nadie pueda encarecer una petición anónima sembrando duplicados),
+  así que una cuenta que quede por encima de ese tope no podrá entrar. El
+  servidor lo avisa por consola cuando ocurre.
+
+Ejecuta la migración una vez por entorno:
+
+```bash
+npm run migrate:unique-email
+```
+
+Si ya hay direcciones repetidas, el script **no borra nada**: las lista y se
+detiene para que decidas qué cuenta conserva cada dirección.
