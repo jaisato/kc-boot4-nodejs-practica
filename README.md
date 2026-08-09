@@ -118,3 +118,10 @@ npm run migrate:unique-email
 
 Si ya hay direcciones repetidas, el script **no borra nada**: las lista y se
 detiene para que decidas qué cuenta conserva cada dirección.
+
+El script construye primero el índice único bajo un nombre temporal y sólo
+después sustituye el antiguo, de modo que a partir de ese punto siempre hay un
+índice único activo — aunque el proceso muera a mitad. Si alguien registra un
+duplicado mientras se ejecuta, la creación falla con el índice antiguo todavía
+en su sitio y no se pierde nada; aun así, lo prudente es detener los registros
+durante la migración.
