@@ -10,20 +10,38 @@
  * login route caps how many accounts it will check a password against, so on
  * such a database a duplicate past the cap could never sign in.
  *
- * The script refuses to guess when duplicates already exist. Deleting or
- * renaming somebody's account is an operator's decision, not a migration's, so
- * it reports the offending addresses and stops.
+ * MongoDB will not hold two indexes over the same key pattern, so the old index
+ * has to be dropped before the unique one can be built - there is no way to keep
+ * unique coverage continuous across the swap. During that window a concurrent
+ * /signup could insert a duplicate and make the rebuild fail, so the script
+ * refuses to run without an explicit acknowledgement that writes are stopped,
+ * and restores the original index if the rebuild does fail.
  *
- *   node ./bin/ensure_unique_email_index.js
+ * It also refuses to guess when duplicates already exist: deleting or renaming
+ * somebody's account is an operator's decision, not a migration's.
+ *
+ *   node ./bin/ensure_unique_email_index.js --confirm
  */
 
 'use strict';
+
+if (process.argv.indexOf('--confirm') === -1) {
+    console.error(
+        '\nEsta migración elimina y vuelve a crear el índice de users.email.\n' +
+        'MongoDB no admite dos índices sobre la misma clave, así que durante unos\n' +
+        'instantes la colección se queda sin ese índice y un registro concurrente\n' +
+        'podría insertar un duplicado y hacer fallar la reconstrucción.\n\n' +
+        'Detén los registros (/signup) y vuelve a ejecutarla con --confirm:\n\n' +
+        '    npm run migrate:unique-email -- --confirm\n'
+    );
+    process.exit(1);
+}
 
 var mongoose = require('mongoose');
 
 var MONGO_URL = process.env.MONGO_URL || 'mongodb://localhost:27017/nodepop';
 var INDEX_NAME = 'email_1';
-var TEMP_INDEX_NAME = 'email_unique_migration';
+
 
 mongoose.connect(MONGO_URL);
 
@@ -99,73 +117,71 @@ function replaceIndex(users, callback) {
             return callback(err);
         }
 
-        var byName = {};
-        (indexes || []).forEach(function (index) {
-            byName[index.name] = index;
-        });
+        var existing = (indexes || []).filter(function (index) {
+            return index.name === INDEX_NAME;
+        })[0];
 
-        if (byName[INDEX_NAME] && byName[INDEX_NAME].unique) {
+        if (existing && existing.unique) {
             console.log('El índice ya era único, no hay nada que hacer.');
             return callback(null);
         }
 
-        // The order matters. Dropping first and creating afterwards leaves a
-        // window - if a duplicate slips in through /signup between the check and
-        // the create, the create fails and the collection is left with no e-mail
-        // index at all, which is worse than the state we started from.
-        //
-        // Building a unique index under a temporary name first means the create
-        // is the step that can fail, and it fails while the original index is
-        // still in place: nothing is lost. From then on a unique index is always
-        // present, even if the process dies midway.
-        console.log('Construyendo el índice único (temporal)...');
-        users.createIndex({email: 1}, {unique: true, name: TEMP_INDEX_NAME}, function (err) {
-            if (err) {
-                if (isDuplicateKeyError(err)) {
-                    return callback(new Error(
-                        'Se ha registrado una dirección repetida mientras se ejecutaba la migración. ' +
-                        'Detén los registros (/signup) y vuelve a ejecutarla. No se ha modificado nada.'
-                    ));
+        var createUnique = function () {
+            console.log('Creando el índice único ' + INDEX_NAME + '...');
+            users.createIndex({email: 1}, {unique: true, name: INDEX_NAME}, function (err) {
+                if (!err) {
+                    return callback(null);
                 }
 
-                return callback(err);
-            }
-
-            var finish = function () {
-                console.log('Eliminando el índice temporal...');
-                users.dropIndex(TEMP_INDEX_NAME, callback);
-            };
-
-            if (!byName[INDEX_NAME]) {
-                return renameToFinal(users, finish, callback);
-            }
-
-            console.log('Eliminando el índice no único ' + INDEX_NAME + '...');
-            users.dropIndex(INDEX_NAME, function (err) {
-                if (err) {
+                if (!existing) {
                     return callback(err);
                 }
 
-                renameToFinal(users, finish, callback);
+                // The window closed badly: a duplicate arrived after the check.
+                // Put the original index back so the collection is not left
+                // without one, then report what happened.
+                console.error('La creación del índice único ha fallado; restaurando el índice anterior...');
+
+                return restore(users, existing, function (restoreErr) {
+                    if (restoreErr) {
+                        return callback(new Error(
+                            'El índice único no se pudo crear (' + err.message + ') y tampoco se pudo ' +
+                            'restaurar el anterior (' + restoreErr.message + '). Revisa los índices de ' +
+                            'users a mano antes de reanudar los registros.'
+                        ));
+                    }
+
+                    callback(new Error(
+                        'Se ha registrado una dirección repetida durante la migración. Se ha dejado la ' +
+                        'colección como estaba. Detén los registros (/signup) y vuelve a intentarlo.'
+                    ));
+                });
             });
+        };
+
+        if (!existing) {
+            return createUnique();
+        }
+
+        console.log('Eliminando el índice no único ' + INDEX_NAME + '...');
+        users.dropIndex(INDEX_NAME, function (err) {
+            if (err) {
+                return callback(err);
+            }
+
+            createUnique();
         });
     });
 }
 
-function renameToFinal(users, done, callback) {
-    // Uniqueness is already enforced by the temporary index at this point, so
-    // creating the final one cannot fail for duplicates.
-    users.createIndex({email: 1}, {unique: true, name: INDEX_NAME}, function (err) {
-        if (err) {
-            return callback(err);
-        }
+function restore(users, previous, callback) {
+    var options = {name: previous.name};
 
-        done();
-    });
-}
+    if (previous.sparse) {
+        options.sparse = true;
+    }
 
-function isDuplicateKeyError(err) {
-    return err && (err.code === 11000 || err.code === 11001);
+    users.createIndex(previous.key || {email: 1}, options, callback);
 }
 
 function fail(err) {
