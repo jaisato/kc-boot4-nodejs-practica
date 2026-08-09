@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "start": "DEBUG=Nodepop:* nodemon ./bin/www",
-    "installDB": "node ./bin/install_db.js"
+    "installDB": "node ./bin/install_db.js",
+    "migrate:unique-email": "node ./bin/ensure_unique_email_index.js"
   },
   "dependencies": {
     "bcrypt": "^0.8.7",

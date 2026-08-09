@@ -73,3 +73,55 @@ Servicio para listar los tags registrados en el sistema. Este servicio **NO** re
 * **Parámetros:** *No se requiere de parámetros.*
 * **Resultado:** *objeto en formato JSON con el éxito de la petición (success) y los datos (tags).*
 
+
+## Security notice: rotate the JWT secret
+
+`lib/jwtAuth.js` used to carry the token-signing secret in plain text. Anyone
+with a copy of this repository could forge a token for any user id, so the old
+value must be considered compromised even though it is no longer in the source
+— it remains in the git history.
+
+The app now reads it from the environment and refuses to start without it:
+
+```bash
+export JWT_SECRET="$(openssl rand -hex 32)"
+npm start
+```
+
+Rotating the secret invalidates every token issued with the old one, which is
+the intended effect.
+
+Passwords are now hashed with a per-password bcrypt salt. Existing hashes keep
+working — bcrypt stores the salt inside the hash, so `bcrypt.compare()` verifies
+old and new records alike, and no migration is needed.
+
+## Migración obligatoria: índice único de email
+
+`models/User.js` declara `email` como único, pero eso sólo surte efecto en bases
+de datos nuevas. Una base creada por una versión anterior ya tiene un índice
+`email_1` **no único**, y MongoDB no lo redefine solo — `npm run installDB`
+tampoco, porque borra documentos y no índices.
+
+Mientras ese índice siga sin ser único:
+
+- `/signup` sigue aceptando direcciones repetidas.
+- El login sólo comprueba la contraseña contra un número acotado de cuentas
+  (para que nadie pueda encarecer una petición anónima sembrando duplicados),
+  así que una cuenta que quede por encima de ese tope no podrá entrar. El
+  servidor lo avisa por consola cuando ocurre.
+
+Ejecuta la migración una vez por entorno, **con los registros detenidos**:
+
+```bash
+npm run migrate:unique-email -- --confirm
+```
+
+MongoDB no admite dos índices sobre la misma clave, así que el índice antiguo
+tiene que eliminarse antes de construir el único: durante ese instante la
+colección se queda sin índice de email. Por eso el script exige `--confirm`, y
+por eso conviene parar `/signup` mientras corre. Si aun así entra un duplicado y
+la reconstrucción falla, el script **restaura el índice anterior** y te lo dice,
+en vez de dejar la colección sin ninguno.
+
+Si ya hay direcciones repetidas antes de empezar, **no borra nada**: las lista y
+se detiene para que decidas qué cuenta conserva cada dirección.
