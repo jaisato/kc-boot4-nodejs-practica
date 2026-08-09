@@ -110,18 +110,18 @@ Mientras ese índice siga sin ser único:
   así que una cuenta que quede por encima de ese tope no podrá entrar. El
   servidor lo avisa por consola cuando ocurre.
 
-Ejecuta la migración una vez por entorno:
+Ejecuta la migración una vez por entorno, **con los registros detenidos**:
 
 ```bash
-npm run migrate:unique-email
+npm run migrate:unique-email -- --confirm
 ```
 
-Si ya hay direcciones repetidas, el script **no borra nada**: las lista y se
-detiene para que decidas qué cuenta conserva cada dirección.
+MongoDB no admite dos índices sobre la misma clave, así que el índice antiguo
+tiene que eliminarse antes de construir el único: durante ese instante la
+colección se queda sin índice de email. Por eso el script exige `--confirm`, y
+por eso conviene parar `/signup` mientras corre. Si aun así entra un duplicado y
+la reconstrucción falla, el script **restaura el índice anterior** y te lo dice,
+en vez de dejar la colección sin ninguno.
 
-El script construye primero el índice único bajo un nombre temporal y sólo
-después sustituye el antiguo, de modo que a partir de ese punto siempre hay un
-índice único activo — aunque el proceso muera a mitad. Si alguien registra un
-duplicado mientras se ejecuta, la creación falla con el índice antiguo todavía
-en su sitio y no se pierde nada; aun así, lo prudente es detener los registros
-durante la migración.
+Si ya hay direcciones repetidas antes de empezar, **no borra nada**: las lista y
+se detiene para que decidas qué cuenta conserva cada dirección.
