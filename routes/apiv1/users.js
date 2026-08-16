@@ -48,27 +48,35 @@ function requireString(value) {
 
 /* GET authenticate users */
 router.post('/login', function(req, res, next) {
-  var email = requireString(req.body.email);
-  var password = requireString(req.body.password);
+  // The whole body is a promise chain so that a rejection anywhere - the query,
+  // any bcrypt comparison - lands in one place. mongoose 8 dropped callback
+  // support, so `exec(fn)` no longer works at all.
+  Promise.resolve().then(async function () {
+    var email = requireString(req.body.email);
+    var password = requireString(req.body.password);
 
-  if (!email || !password) {
-    return next(new APIError(400, 'email and password are required.'));
-  }
-
-  // At most MAX_LOGIN_CANDIDATES accounts are considered. The address is unique
-  // going forward, so this is normally a single row; the limit bounds the work
-  // for collections that already contain duplicates from before the index.
-  User.find({email: email}).limit(MAX_LOGIN_CANDIDATES).exec(function (err, users) {
-    if (err) {
-      return next(err);
+    if (!email || !password) {
+      throw new APIError(400, 'email and password are required.');
     }
 
-    if (!users || users.length === 0) {
-      return bcrypt.compare(password, DUMMY_HASH, function () {
-        // Same answer whether the account is missing or the password is wrong,
-        // so the endpoint cannot be used to enumerate registered e-mails.
-        next(new APIError(401, 'Invalid credentials.'));
-      });
+    // At most MAX_LOGIN_CANDIDATES accounts are considered. The address is
+    // unique going forward, so this is normally a single row; the limit bounds
+    // the work for collections that already contain duplicates from before the
+    // index.
+    //
+    // Only the two fields the check needs are read back, so the hash of every
+    // candidate is not pulled into memory wholesale.
+    var users = await User.find({email: email})
+      .limit(MAX_LOGIN_CANDIDATES)
+      .select('_id password')
+      .exec();
+
+    if (users.length === 0) {
+      // Same answer whether the account is missing or the password is wrong,
+      // and the same amount of work, so the endpoint cannot be used to
+      // enumerate registered e-mails by response time.
+      await bcrypt.compare(password, DUMMY_HASH);
+      throw new APIError(401, 'Invalid credentials.');
     }
 
     if (users.length === MAX_LOGIN_CANDIDATES) {
@@ -82,89 +90,85 @@ router.post('/login', function(req, res, next) {
       );
     }
 
-    var index = 0;
+    for (var i = 0; i < users.length; i++) {
+      var matches = await bcrypt.compare(password, users[i].password);
 
-    (function tryNext() {
-      if (index >= users.length) {
-        return next(new APIError(401, 'Invalid credentials.'));
-      }
-
-      var user = users[index++];
-
-      bcrypt.compare(password, user.password, function (err, matches) {
-        if (err) {
-          return next(err);
-        }
-
-        if (!matches) {
-          return tryNext();
-        }
-
+      if (matches) {
         var token = jwt.sign(
-            {id: user._id},
+            {id: users[i]._id},
             jwtAuth.TOKEN_SECRET,
-            {expiresIn: '24 hours'}
+            {expiresIn: '24h'}
         );
 
-        res.json({success: true, token: token});
-      });
-    })();
-  });
+        return res.json({success: true, token: token});
+      }
+    }
+
+    throw new APIError(401, 'Invalid credentials.');
+  }).catch(next);
 });
 
 /* POST register users */
 router.post('/signup', function(req, res, next) {
-  var password = requireString(req.body.password);
+  Promise.resolve().then(async function () {
+    var password = requireString(req.body.password);
+    var email = requireString(req.body.email);
+    var name = requireString(req.body.name);
 
-  if (!password) {
-    return next(new APIError(400, 'password is required.'));
-  }
-
-  bcrypt.hash(password, BCRYPT_ROUNDS, function (err, passwordHash) {
-    if (err) {
-      return next(err);
+    // Every field is checked before any work happens. The old order hashed the
+    // password first and only then looked at the e-mail, so a request with no
+    // e-mail still paid for a full cost-10 bcrypt hash before being rejected -
+    // an unauthenticated caller could burn CPU with bodies that were never
+    // going to be accepted.
+    if (!email) {
+      throw new APIError(400, 'email is required.');
     }
 
-    var emailField = requireString(req.body.email);
-
-    if (!emailField) {
-      return next(new APIError(400, 'email is required.'));
+    if (!password) {
+      throw new APIError(400, 'password is required.');
     }
 
-    var userFields = {
-      name: req.body.name,
-      email: emailField,
-      password: passwordHash
-    };
+    if (!name) {
+      throw new APIError(400, 'name is required.');
+    }
 
-    var newUser = new User(userFields);
+    var newUser = new User({
+      name: name,
+      email: email,
+      password: await bcrypt.hash(password, BCRYPT_ROUNDS)
+    });
 
-    // validate() is asynchronous: returning from its callback did not stop the
-    // save() below, so an invalid document called next(err) here and again from
-    // save(), responding twice.
-    newUser.validate(function (err) {
-      if (err) {
-        return next(err);
+    try {
+      await newUser.save();
+    } catch (err) {
+      // The unique index rejects an address that is already registered.
+      // Answering 409 keeps the raw driver error out of the response.
+      if (err && err.code === 11000) {
+        throw new APIError(409, 'That e-mail is already registered.');
       }
 
-      newUser.save(function (err, userCreated) {
-        if (err) {
-          // The unique index rejects an address that is already registered.
-          // Answering 409 keeps the raw driver error out of the response.
-          if (err.code === 11000) {
-            return next(new APIError(409, 'That e-mail is already registered.'));
-          }
+      // A schema violation is the caller's fault, not a server fault; without
+      // this it surfaced as a 500.
+      if (err && err.name === 'ValidationError') {
+        throw new APIError(400, err.message);
+      }
 
-          return next(err);
-        }
+      throw err;
+    }
 
-        res.json({
-          success: true,
-          data: userCreated
-        });
-      });
+    // The created document used to be echoed back whole, which put the bcrypt
+    // hash of the password the caller had just chosen into the response body -
+    // and from there into any client-side log or cache. Only the public fields
+    // are returned.
+    res.status(201).json({
+      success: true,
+      data: {
+        _id: newUser._id,
+        name: newUser.name,
+        email: newUser.email
+      }
     });
-  });
+  }).catch(next);
 });
 
 module.exports = router;
