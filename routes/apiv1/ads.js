@@ -27,8 +27,12 @@ var DEFAULT_LIMIT = 20;
  * Fields a caller is allowed to project. `select` takes arbitrary strings, and
  * a caller could otherwise ask for fields that are not part of the public shape
  * of an ad.
+ *
+ * `_id` belongs here: mongoose returns it on every ad by default, so it is part
+ * of that public shape, and `?fields=_id,name` is a request clients could
+ * already make. Leaving it out turned a working call into a 400.
  */
-var SELECTABLE_FIELDS = ['name', 'price', 'on_sale', 'photo', 'tags'];
+var SELECTABLE_FIELDS = ['_id', 'name', 'price', 'on_sale', 'photo', 'tags'];
 
 /**
  * Escapes the regular-expression metacharacters in a user-supplied string.

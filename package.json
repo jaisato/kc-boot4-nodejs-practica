@@ -6,7 +6,8 @@
     "node": ">=18"
   },
   "scripts": {
-    "start": "DEBUG=Nodepop:* nodemon ./bin/www",
+    "start": "node ./bin/www",
+    "dev": "DEBUG=Nodepop:* nodemon ./bin/www",
     "installDB": "node ./bin/install_db.js",
     "migrate:unique-email": "node ./bin/ensure_unique_email_index.js"
   },
