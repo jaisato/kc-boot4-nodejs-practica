@@ -11,7 +11,10 @@ Para inicializar la base de datos en MongoDB ejecutar desde la raíz: **_npm run
 
 Y para arrancar el servidor ejecutar: **_npm start_**
 
-**NOTA:** tened en cuenta que el servidor arranca con _nodemon_, así que previamente se debe haber instalado dicho paquete. De todas formas, ya se ha incluido el paquete _nodemon_ en el fichero _package.json_ de dependencias del proyecto.
+**NOTA:** `npm start` arranca con `node`, sin dependencias de desarrollo, de modo
+que funciona en un despliegue instalado con `npm install --omit=dev`. Para
+desarrollo con recarga automática está `npm run dev`, que usa _nodemon_ (incluido
+en las `devDependencies`).
 
 ## Base de datos inicial
 Al ejecutar **_npm run installDB_**, el script *install_db.js* carga los datos que inicializan el base de datos en MongoDB.
@@ -52,10 +55,19 @@ Servicio para listar los anuncios de artículos registrados en el sistema.
 Este servicio requiere de autenticación *(JSON web token)*.
 
 * **Entry point:** */apiv1/users/ads*
+* **Autenticación:** el token se envía **en la cabecera**, no en la query string:
+
+	```
+	Authorization: Bearer <token>
+	```
+
+	También se acepta la cabecera `x-access-token` por compatibilidad. Enviarlo
+	como `?token=...` **ya no funciona**: un token en la query string acaba escrito
+	en el log de accesos, en el del proxy y en la cabecera `Referer`.
+
 * **Parámetros:**
-	* **token:** String. *Token de autenticación.*
-	* **limit:** Int. *Número de anuncios deseados.*
-	* **skip:** Int. *Número de anuncios que se escapan.*
+	* **limit:** Int. *Número de anuncios deseados (por defecto 20, máximo 100).*
+	* **skip:** Int. *Número de anuncios que se escapan (entero no negativo).*
 	* **fields:** String. *Propiedades o atributos del anuncio deseados (separados por coma o espacio). Ejemplo: name, price.*
 	* **name:** String. _Busca los anuncios cuyo nombre de artículo empieza por **name**. Ejemplo: 'mac'_
 	* **tags:** String. *Busca los anuncios que pertenecen a los tags deseados (separados por coma o espacio). Ejemplo: mobile, work.*
@@ -73,6 +85,18 @@ Servicio para listar los tags registrados en el sistema. Este servicio **NO** re
 * **Parámetros:** *No se requiere de parámetros.*
 * **Resultado:** *objeto en formato JSON con el éxito de la petición (success) y los datos (tags).*
 
+
+## Configuración por entorno
+
+| Variable | Obligatoria | Por defecto | Descripción |
+|----------|-------------|-------------|-------------|
+| `JWT_SECRET` | Sí | — | Secreto de firma de los tokens. La app no arranca sin él. |
+| `MONGODB_URI` | No | `mongodb://localhost:27017/nodepop` | Cadena de conexión a MongoDB. |
+| `PORT` | No | `3000` | Puerto de escucha. |
+
+La URI de MongoDB estaba fijada en el código, así que la aplicación solo podía
+hablar con una base de datos en la misma máquina; ahora se puede apuntar a un
+servidor real sin tocar el código.
 
 ## Security notice: rotate the JWT secret
 
