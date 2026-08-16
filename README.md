@@ -11,7 +11,10 @@ Para inicializar la base de datos en MongoDB ejecutar desde la raíz: **_npm run
 
 Y para arrancar el servidor ejecutar: **_npm start_**
 
-**NOTA:** tened en cuenta que el servidor arranca con _nodemon_, así que previamente se debe haber instalado dicho paquete. De todas formas, ya se ha incluido el paquete _nodemon_ en el fichero _package.json_ de dependencias del proyecto.
+**NOTA:** `npm start` arranca con `node`, sin dependencias de desarrollo, de modo
+que funciona en un despliegue instalado con `npm install --omit=dev`. Para
+desarrollo con recarga automática está `npm run dev`, que usa _nodemon_ (incluido
+en las `devDependencies`).
 
 ## Base de datos inicial
 Al ejecutar **_npm run installDB_**, el script *install_db.js* carga los datos que inicializan el base de datos en MongoDB.
