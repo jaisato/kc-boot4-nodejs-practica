@@ -11,6 +11,43 @@ var bcrypt = require('bcrypt');
 
 var APIError = require('../../lib/APIError');
 
+var rateLimit = require('express-rate-limit');
+
+/**
+ * Neither endpoint had any request budget, so /login could be walked through a
+ * password list as fast as the process could hash: the constant-time work this
+ * file goes to some trouble to guarantee bounds the cost of *one* attempt, not
+ * the number of attempts. /signup is capped too - it is the other unauthenticated
+ * route that pays for a cost-10 bcrypt hash per call.
+ *
+ * The limiter keys on the client IP, so it slows an attacker down rather than
+ * stopping a distributed one; behind a proxy the app needs `trust proxy` set for
+ * that key to be the real client. Per-account lockout would need shared state
+ * this app does not have.
+ */
+var loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Only failed attempts count, so a client signing in normally is never
+  // throttled by its own successful logins.
+  skipSuccessfulRequests: true,
+  handler: function (req, res, next) {
+    next(new APIError(429, 'Too many login attempts. Try again later.'));
+  }
+});
+
+var signupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: function (req, res, next) {
+    next(new APIError(429, 'Too many sign-up attempts. Try again later.'));
+  }
+});
+
 // bcrypt generates a fresh salt per password when given a cost factor. The
 // previous code reused one hard-coded salt for every user, so identical
 // passwords produced identical hashes and a single rainbow table covered the
@@ -47,7 +84,7 @@ function requireString(value) {
 }
 
 /* GET authenticate users */
-router.post('/login', function(req, res, next) {
+router.post('/login', loginLimiter, function(req, res, next) {
   // The whole body is a promise chain so that a rejection anywhere - the query,
   // any bcrypt comparison - lands in one place. mongoose 8 dropped callback
   // support, so `exec(fn)` no longer works at all.
@@ -109,7 +146,7 @@ router.post('/login', function(req, res, next) {
 });
 
 /* POST register users */
-router.post('/signup', function(req, res, next) {
+router.post('/signup', signupLimiter, function(req, res, next) {
   Promise.resolve().then(async function () {
     var password = requireString(req.body.password);
     var email = requireString(req.body.email);
