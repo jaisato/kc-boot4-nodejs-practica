@@ -20,6 +20,33 @@ var tags = require('./routes/apiv1/tags');
 
 var app = express();
 
+/**
+ * How many reverse proxies sit in front of this app.
+ *
+ * Express reports `req.ip` as the socket's peer address unless told otherwise,
+ * so behind a proxy - the normal deployment - every request looks like it comes
+ * from the proxy itself. The login limiter in routes/apiv1/users.js keys on
+ * `req.ip`, which makes that gap wrong in both directions at once: its budget
+ * of ten failed attempts per fifteen minutes stops being per-client and becomes
+ * one global budget, so ten failures from anybody lock the whole user base out
+ * of signing in, while an attacker is not slowed down at all, because their
+ * attempts were collapsing to that same single key regardless.
+ *
+ * A hop count rather than `true` on purpose: `trust proxy: true` trusts the
+ * entire X-Forwarded-For chain, so a client can prepend whatever address it
+ * likes and mint itself a fresh rate-limit bucket on every request - which
+ * hands back the bypass this setting exists to close. A number counts hops back
+ * from the socket, so only the addresses the proxies themselves appended count.
+ *
+ * Defaults to 0 (no proxy). Getting it wrong in that direction over-throttles;
+ * getting it wrong in the other direction removes the limit entirely.
+ */
+var trustProxyHops = parseInt(process.env.TRUST_PROXY_HOPS || '0', 10);
+
+if (!isNaN(trustProxyHops) && trustProxyHops > 0) {
+  app.set('trust proxy', trustProxyHops);
+}
+
 // view engine setup
 app.set('views', path.join(__dirname, 'views'));
 app.set('view engine', 'ejs');

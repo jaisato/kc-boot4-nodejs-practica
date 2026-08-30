@@ -21,7 +21,7 @@ var rateLimit = require('express-rate-limit');
  * route that pays for a cost-10 bcrypt hash per call.
  *
  * The limiter keys on the client IP, so it slows an attacker down rather than
- * stopping a distributed one; behind a proxy the app needs `trust proxy` set for
+ * stopping a distributed one; behind a proxy the app needs TRUST_PROXY_HOPS set for
  * that key to be the real client. Per-account lockout would need shared state
  * this app does not have.
  */

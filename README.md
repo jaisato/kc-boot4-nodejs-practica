@@ -94,6 +94,7 @@ Servicio para listar los tags registrados en el sistema. Este servicio **NO** re
 | `JWT_SECRET` | Sí | — | Secreto de firma de los tokens. La app no arranca sin él. |
 | `MONGODB_URI` | No | `mongodb://localhost:27017/nodepop` | Cadena de conexión a MongoDB. |
 | `PORT` | No | `3000` | Puerto de escucha. |
+| `TRUST_PROXY_HOPS` | No | `0` | Número de proxies inversos delante de la app. Ver más abajo. |
 
 La URI de MongoDB estaba fijada en el código, así que la aplicación solo podía
 hablar con una base de datos en la misma máquina; ahora se puede apuntar a un
@@ -169,8 +170,18 @@ Ahora hay un presupuesto por IP (`express-rate-limit`):
 Al agotarse se devuelve `429` con el mismo formato de error que el resto de la
 API. El contador es por IP y vive en memoria del proceso, así que:
 
-- Detrás de un proxy hay que configurar `app.set('trust proxy', ...)` para que
-  la IP que se cuente sea la del cliente y no la del proxy.
+- Detrás de un proxy hay que poner `TRUST_PROXY_HOPS` al número de proxies que
+  hay delante (`TRUST_PROXY_HOPS=1` para uno). Sin eso Express toma como IP la
+  del proxy, y como el contador es por IP el presupuesto deja de ser por cliente
+  y pasa a ser uno solo para todo el mundo: diez fallos de cualquiera dejan sin
+  poder entrar al resto, y al atacante no se le frena, porque sus intentos ya
+  caían todos en esa misma clave.
+
+  Es un número y no `true` a propósito: `trust proxy: true` se fía de toda la
+  cadena `X-Forwarded-For`, así que un cliente puede anteponer la dirección que
+  quiera y estrenar contador en cada petición. El número cuenta saltos hacia
+  atrás desde el socket, de modo que solo se usan las direcciones que han
+  añadido los propios proxies.
 - Con varias instancias, cada una lleva su propia cuenta; para un límite real
   compartido hace falta un store (Redis).
 - No es un bloqueo por cuenta: frena la fuerza bruta desde un origen, no una
