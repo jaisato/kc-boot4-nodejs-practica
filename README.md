@@ -74,6 +74,7 @@ Este servicio requiere de autenticación *(JSON web token)*.
 	* **minprice:** Float. *Busca los anuncios a partir del precio mínimo deseado. Ejemplo: 490.99*
 	* **maxprice:** Float. *Busca los anuncios a partir del precio máximo deseado. Ejemplo: 490.99*
 	* **onsale:** Boolean. *Busca los anuncios por tipo (en venta o búsqueda). Ejemplo: onsale: 1 (true)*
+	* **sort:** String. *Campos por los que ordenar (separados por coma o espacio), cada uno con `-` delante para orden descendente. Sólo se admiten los mismos campos que `fields`. Ejemplo: `-price,name`*
 * **Resultado:** *objeto en formato JSON con el éxito de la petición (success) y los datos (data) o el error (error)*
 
 Si se produce un error en la petición la API devuelve un **error** en formato JSON. Si no, devuelve los anuncios encontrados en un array llamado **ads**.
@@ -149,3 +150,28 @@ en vez de dejar la colección sin ninguno.
 
 Si ya hay direcciones repetidas antes de empezar, **no borra nada**: las lista y
 se detiene para que decidas qué cuenta conserva cada dirección.
+
+## Límite de peticiones en las rutas anónimas
+
+`/apiv1/users/login` y `/apiv1/users/signup` son las dos rutas que un cliente
+sin credenciales puede llamar, y cada llamada paga un bcrypt de coste 10. El
+trabajo constante que hace `login` acota el coste de **un** intento, no el
+número de intentos: sin un límite, una lista de contraseñas se podía recorrer a
+la velocidad a la que el proceso fuese capaz de hashear.
+
+Ahora hay un presupuesto por IP (`express-rate-limit`):
+
+| Ruta | Ventana | Intentos | Notas |
+|------|---------|----------|-------|
+| `/apiv1/users/login` | 15 min | 10 | sólo cuentan los intentos fallidos |
+| `/apiv1/users/signup` | 1 h | 20 | |
+
+Al agotarse se devuelve `429` con el mismo formato de error que el resto de la
+API. El contador es por IP y vive en memoria del proceso, así que:
+
+- Detrás de un proxy hay que configurar `app.set('trust proxy', ...)` para que
+  la IP que se cuente sea la del cliente y no la del proxy.
+- Con varias instancias, cada una lleva su propia cuenta; para un límite real
+  compartido hace falta un store (Redis).
+- No es un bloqueo por cuenta: frena la fuerza bruta desde un origen, no una
+  distribuida.

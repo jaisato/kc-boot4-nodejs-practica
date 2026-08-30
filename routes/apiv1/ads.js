@@ -128,7 +128,12 @@ router.get('/', function(req, res, next) {
     return next(fields);
   }
 
-  var sort = requireString(req.query.sort);
+  // --- sort -----------------------------------------------------------------
+  var sort = buildSort(req.query.sort);
+
+  if (sort instanceof APIError) {
+    return next(sort);
+  }
 
   Ad.list(filter, sort, paging.limit, paging.skip, fields)
       .then(function(ads) {
@@ -268,6 +273,56 @@ function buildFields(fields) {
       400,
       "Unknown field(s): " + unknown.join(', ') +
       '. Allowed: ' + SELECTABLE_FIELDS.join(', ') + '.'
+    );
+  }
+
+  return requested.length > 0 ? requested.join(' ') : null;
+}
+
+/**
+ * Builds the argument passed to `sort()`.
+ *
+ * `sort` used to go through untouched, so the caller chose the sort key. Mongo
+ * can only sort without loading the whole result set when an index covers the
+ * key; asking for one that no index covers makes the server pull the matching
+ * documents into memory and sort them there, and it will refuse past 32MB. That
+ * is a lever an unauthenticated-shaped request should not have, so the keys are
+ * restricted to the same fields `fields` already restricts - each optionally
+ * prefixed with '-' for descending.
+ *
+ * @returns {string|null|APIError}
+ */
+function buildSort(sort) {
+  if (typeof sort === 'undefined') {
+    return null;
+  }
+
+  sort = requireString(sort);
+
+  if (sort === null) {
+    return new APIError(400, "'sort' must be a single text value.");
+  }
+
+  if (sort.length === 0) {
+    return null;
+  }
+
+  var requested = sort.split(/[ ,]+/).filter(function (key) {
+    return key.length > 0;
+  });
+
+  var unknown = requested.filter(function (key) {
+    var field = key.charAt(0) === '-' ? key.slice(1) : key;
+
+    return SELECTABLE_FIELDS.indexOf(field) === -1;
+  });
+
+  if (unknown.length > 0) {
+    return new APIError(
+      400,
+      "Unknown sort key(s): " + unknown.join(', ') +
+      '. Allowed: ' + SELECTABLE_FIELDS.join(', ') +
+      ", each optionally prefixed with '-' for descending."
     );
   }
 
