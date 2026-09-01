@@ -94,7 +94,7 @@ Servicio para listar los tags registrados en el sistema. Este servicio **NO** re
 | `JWT_SECRET` | Sí | — | Secreto de firma de los tokens. La app no arranca sin él. |
 | `MONGODB_URI` | No | `mongodb://localhost:27017/nodepop` | Cadena de conexión a MongoDB. |
 | `PORT` | No | `3000` | Puerto de escucha. |
-| `TRUST_PROXY_HOPS` | No | `0` | Número de proxies inversos delante de la app. Ver más abajo. |
+| `TRUST_PROXY_HOPS` | No | `0` | Número de proxies inversos delante de la app. Entero no negativo; con cualquier otro valor la app no arranca. Ver más abajo. |
 
 La URI de MongoDB estaba fijada en el código, así que la aplicación solo podía
 hablar con una base de datos en la misma máquina; ahora se puede apuntar a un
@@ -182,6 +182,14 @@ API. El contador es por IP y vive en memoria del proceso, así que:
   quiera y estrenar contador en cada petición. El número cuenta saltos hacia
   atrás desde el socket, de modo que solo se usan las direcciones que han
   añadido los propios proxies.
+
+  El valor tiene que ser un entero no negativo **entero**: con cualquier otra
+  cosa la app se niega a arrancar, igual que sin `JWT_SECRET`. Aceptarlo a
+  medias convertía una errata en una mala configuración silenciosa -`10oops`
+  se fiaba de diez saltos en vez de uno, con lo que una entrada de
+  `X-Forwarded-For` puesta por el cliente pasaba a ser la clave del contador;
+  `1.5` se quedaba en 1; y `foo` dejaba el ajuste apagado-. Vacío o sin definir
+  sigue significando "sin proxy".
 - Con varias instancias, cada una lleva su propia cuenta; para un límite real
   compartido hace falta un store (Redis).
 - No es un bloqueo por cuenta: frena la fuerza bruta desde un origen, no una
