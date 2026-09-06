@@ -35,6 +35,32 @@ var DEFAULT_LIMIT = 20;
 var SELECTABLE_FIELDS = ['_id', 'name', 'price', 'on_sale', 'photo', 'tags'];
 
 /**
+ * Base URL the photo links are built on.
+ *
+ * These links used to be assembled from `req.protocol` and `req.get('host')`.
+ * The Host header is chosen by the client, so a request carrying
+ * `Host: evil.example` came back with every photo URL pointing at evil.example -
+ * the app happily quoting an attacker's domain as its own. On its own that is
+ * mostly self-inflicted, since the response goes back to whoever sent the
+ * header; it stops being self-inflicted the moment one of those responses is
+ * cached by a shared cache or a client stores the URL.
+ *
+ * `req.protocol` had a plainer problem: it reports the scheme of the connection
+ * Express sees, so behind a TLS-terminating proxy every generated link said
+ * http:// even though the API is served over https. (With `trust proxy` set it
+ * follows X-Forwarded-Proto, but that setting defaults to 0 here.)
+ *
+ * PUBLIC_BASE_URL fixes both by stating the public origin once - for example
+ * `https://api.example.com`. Left unset, the previous request-derived
+ * behaviour is kept so existing local setups are unaffected.
+ */
+var PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || '').trim().replace(/\/+$/, '');
+
+function photoBaseUrl(req) {
+  return PUBLIC_BASE_URL || req.protocol + '://' + req.get('host');
+}
+
+/**
  * Escapes the regular-expression metacharacters in a user-supplied string.
  *
  * The name filter is built as `new RegExp('^' + name)`. Without escaping, the
@@ -137,9 +163,11 @@ router.get('/', function(req, res, next) {
 
   Ad.list(filter, sort, paging.limit, paging.skip, fields)
       .then(function(ads) {
+        var baseUrl = photoBaseUrl(req);
+
         ads.forEach(function (ad) {
           if (ad.photo) {
-            ad.photo = req.protocol + '://' + req.get('host') + '/images/ads/' + ad.photo;
+            ad.photo = baseUrl + '/images/ads/' + ad.photo;
           }
         });
 
