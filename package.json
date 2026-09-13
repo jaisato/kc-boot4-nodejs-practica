@@ -26,5 +26,18 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
-  }
+  },
+  "overrides": {
+    "qs": "^6.16.0"
+  },
+  "//": [
+    "overrides.qs: express 4 and body-parser 1 pin qs to ~6.15, and 6.15.3 is the",
+    "last release of two advisories (array-limit bypass GHSA-x5fp-wj9c-mxmx, and",
+    "isBuffer DoS GHSA-4mjr-xmp4-gh2g) fixed in 6.16.0, which no express 4 release",
+    "requires yet. The alternative npm offers is `npm audit fix --force`, which",
+    "installs express 5 - a breaking change this app is not ready for. The query",
+    "parser is what every request goes through, so the patched line is forced for",
+    "every dependant instead. Remove this once `npm ls qs` stops reporting",
+    "\"overridden\", which means express and body-parser require 6.16 on their own."
+  ]
 }
