@@ -94,7 +94,44 @@ Servicio para listar los tags registrados en el sistema. Este servicio **NO** re
 | `JWT_SECRET` | Sí | — | Secreto de firma de los tokens. La app no arranca sin él. |
 | `MONGODB_URI` | No | `mongodb://localhost:27017/nodepop` | Cadena de conexión a MongoDB. |
 | `PORT` | No | `3000` | Puerto de escucha. |
+| `PUBLIC_BASE_URL` | En producción | Se deduce de la petición | Origen público con el que se construyen las URL de las fotos en `/apiv1/ads`, p. ej. `https://api.example.com`. Se valida al arrancar; con un valor que no sea una URL `http(s)` absoluta la app no arranca. Ver más abajo. |
 | `TRUST_PROXY_HOPS` | No | `0` | Número de proxies inversos delante de la app. Entero no negativo; con cualquier otro valor la app no arranca. Ver más abajo. |
+
+### `PUBLIC_BASE_URL`
+
+El listado de anuncios devuelve la foto como URL absoluta, y esa URL se montaba
+con `req.protocol` y la cabecera `Host` de la petición. La cabecera `Host` la
+elige el cliente, así que una petición con `Host: evil.example` obtenía como
+respuesta unas URL de foto que apuntaban a `evil.example`: la API citando el
+dominio de un tercero como si fuera el suyo. Mientras la respuesta vuelve solo a
+quien mandó la cabecera el daño es limitado, pero deja de serlo en cuanto una
+caché compartida guarda esa respuesta o un cliente almacena la URL.
+
+`req.protocol` tenía además un problema más mundano: informa del esquema de la
+conexión que ve Express, de modo que detrás de un proxy que termina TLS todos los
+enlaces salían como `http://` aunque la API se sirva por `https://`.
+
+Poniendo `PUBLIC_BASE_URL` se declara el origen público una sola vez y se acaban
+las dos cosas:
+
+```bash
+export PUBLIC_BASE_URL="https://api.example.com"
+```
+
+**En producción hay que definirla.** Si no se define se mantiene el
+comportamiento anterior —la URL se deduce de `req.protocol` y de la cabecera
+`Host`—, es decir, sigue siendo el cliente quien decide qué dominio aparece en
+las URL de las fotos. Ese valor por defecto existe para que los entornos locales
+no necesiten configuración, no para un despliegue.
+
+El valor se valida al arrancar con `new URL()`: tiene que ser una URL absoluta
+`http` o `https`, sin query ni fragmento (se admite un prefijo de ruta, por si
+la app está montada bajo uno, y se tolera la barra final). Con cualquier otra
+cosa —`api.example.com` sin esquema, por ejemplo— la app se niega a arrancar
+con un mensaje que lo dice, igual que sin `JWT_SECRET` o con un
+`TRUST_PROXY_HOPS` mal formado: una URL rota pegada a todos los enlaces sólo se
+notaría cuando un cliente no pudiera cargar una imagen. Vacío o sin definir
+significa "no configurada".
 
 La URI de MongoDB estaba fijada en el código, así que la aplicación solo podía
 hablar con una base de datos en la misma máquina; ahora se puede apuntar a un
