@@ -52,9 +52,61 @@ var SELECTABLE_FIELDS = ['_id', 'name', 'price', 'on_sale', 'photo', 'tags'];
  *
  * PUBLIC_BASE_URL fixes both by stating the public origin once - for example
  * `https://api.example.com`. Left unset, the previous request-derived
- * behaviour is kept so existing local setups are unaffected.
+ * behaviour is kept so existing local setups are unaffected. That fallback is
+ * for development only: in production PUBLIC_BASE_URL must be set, otherwise
+ * the Host header keeps deciding what the links say.
  */
-var PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || '').trim().replace(/\/+$/, '');
+var PUBLIC_BASE_URL = readPublicBaseUrl(process.env.PUBLIC_BASE_URL);
+
+/**
+ * Parses PUBLIC_BASE_URL once, at startup.
+ *
+ * Empty or whitespace-only means "unset", the way an exported but unfilled
+ * variable usually does, and keeps the request-derived origin. Anything else
+ * has to be an absolute http(s) URL. A value that does not parse - a bare host
+ * name, a typo in the scheme, a stray quote - would otherwise be glued onto
+ * every photo link and only be noticed when a client failed to load an image,
+ * so the process refuses to start instead: the same stance JWT_SECRET and
+ * TRUST_PROXY_HOPS already take. A path prefix is allowed, since the app may be
+ * mounted under one; a query string or fragment is not, because neither can be
+ * part of a base that paths are appended to.
+ *
+ * @returns {string|null} the base without a trailing slash, or null when unset
+ */
+function readPublicBaseUrl(raw) {
+  var value = (raw || '').trim();
+
+  if (value.length === 0) {
+    return null;
+  }
+
+  var parsed;
+
+  try {
+    parsed = new URL(value);
+  } catch (e) {
+    throw new Error(
+      'PUBLIC_BASE_URL must be an absolute URL such as https://api.example.com ' +
+      '(the public origin the photo links are built on). Got: ' +
+      JSON.stringify(value)
+    );
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(
+      'PUBLIC_BASE_URL must be an http or https URL. Got: ' + JSON.stringify(value)
+    );
+  }
+
+  if (parsed.search || parsed.hash) {
+    throw new Error(
+      'PUBLIC_BASE_URL must not carry a query string or fragment. Got: ' +
+      JSON.stringify(value)
+    );
+  }
+
+  return value.replace(/\/+$/, '');
+}
 
 function photoBaseUrl(req) {
   return PUBLIC_BASE_URL || req.protocol + '://' + req.get('host');
