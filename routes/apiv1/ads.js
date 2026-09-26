@@ -35,6 +35,84 @@ var DEFAULT_LIMIT = 20;
 var SELECTABLE_FIELDS = ['_id', 'name', 'price', 'on_sale', 'photo', 'tags'];
 
 /**
+ * Base URL the photo links are built on.
+ *
+ * These links used to be assembled from `req.protocol` and `req.get('host')`.
+ * The Host header is chosen by the client, so a request carrying
+ * `Host: evil.example` came back with every photo URL pointing at evil.example -
+ * the app happily quoting an attacker's domain as its own. On its own that is
+ * mostly self-inflicted, since the response goes back to whoever sent the
+ * header; it stops being self-inflicted the moment one of those responses is
+ * cached by a shared cache or a client stores the URL.
+ *
+ * `req.protocol` had a plainer problem: it reports the scheme of the connection
+ * Express sees, so behind a TLS-terminating proxy every generated link said
+ * http:// even though the API is served over https. (With `trust proxy` set it
+ * follows X-Forwarded-Proto, but that setting defaults to 0 here.)
+ *
+ * PUBLIC_BASE_URL fixes both by stating the public origin once - for example
+ * `https://api.example.com`. Left unset, the previous request-derived
+ * behaviour is kept so existing local setups are unaffected. That fallback is
+ * for development only: in production PUBLIC_BASE_URL must be set, otherwise
+ * the Host header keeps deciding what the links say.
+ */
+var PUBLIC_BASE_URL = readPublicBaseUrl(process.env.PUBLIC_BASE_URL);
+
+/**
+ * Parses PUBLIC_BASE_URL once, at startup.
+ *
+ * Empty or whitespace-only means "unset", the way an exported but unfilled
+ * variable usually does, and keeps the request-derived origin. Anything else
+ * has to be an absolute http(s) URL. A value that does not parse - a bare host
+ * name, a typo in the scheme, a stray quote - would otherwise be glued onto
+ * every photo link and only be noticed when a client failed to load an image,
+ * so the process refuses to start instead: the same stance JWT_SECRET and
+ * TRUST_PROXY_HOPS already take. A path prefix is allowed, since the app may be
+ * mounted under one; a query string or fragment is not, because neither can be
+ * part of a base that paths are appended to.
+ *
+ * @returns {string|null} the base without a trailing slash, or null when unset
+ */
+function readPublicBaseUrl(raw) {
+  var value = (raw || '').trim();
+
+  if (value.length === 0) {
+    return null;
+  }
+
+  var parsed;
+
+  try {
+    parsed = new URL(value);
+  } catch (e) {
+    throw new Error(
+      'PUBLIC_BASE_URL must be an absolute URL such as https://api.example.com ' +
+      '(the public origin the photo links are built on). Got: ' +
+      JSON.stringify(value)
+    );
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(
+      'PUBLIC_BASE_URL must be an http or https URL. Got: ' + JSON.stringify(value)
+    );
+  }
+
+  if (parsed.search || parsed.hash) {
+    throw new Error(
+      'PUBLIC_BASE_URL must not carry a query string or fragment. Got: ' +
+      JSON.stringify(value)
+    );
+  }
+
+  return value.replace(/\/+$/, '');
+}
+
+function photoBaseUrl(req) {
+  return PUBLIC_BASE_URL || req.protocol + '://' + req.get('host');
+}
+
+/**
  * Escapes the regular-expression metacharacters in a user-supplied string.
  *
  * The name filter is built as `new RegExp('^' + name)`. Without escaping, the
@@ -137,9 +215,11 @@ router.get('/', function(req, res, next) {
 
   Ad.list(filter, sort, paging.limit, paging.skip, fields)
       .then(function(ads) {
+        var baseUrl = photoBaseUrl(req);
+
         ads.forEach(function (ad) {
           if (ad.photo) {
-            ad.photo = req.protocol + '://' + req.get('host') + '/images/ads/' + ad.photo;
+            ad.photo = baseUrl + '/images/ads/' + ad.photo;
           }
         });
 
