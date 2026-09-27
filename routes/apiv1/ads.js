@@ -180,7 +180,7 @@ router.get('/', function(req, res, next) {
   }
 
   // --- on sale --------------------------------------------------------------
-  if (typeof req.query.onsale !== 'undefined' && req.query.onsale.length > 0) {
+  if (typeof req.query.onsale !== 'undefined' && req.query.onsale !== '') {
     // Same double-response bug as above: an invalid value used to call next()
     // and then leave `filter.on_sale = undefined` behind.
     var onSale = checkTypeFilter(req.query.onsale);
@@ -234,12 +234,27 @@ router.get('/', function(req, res, next) {
  *   price filter was requested, or an APIError describing the bad value. It
  *   deliberately does not touch `next` - see the call site.
  */
+function parsePrice(value) {
+  if (typeof value !== 'string' ||
+      !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(value.trim())) {
+    return NaN;
+  }
+  return Number(value);
+}
+
+function parsePagingInteger(value) {
+  if (typeof value !== 'string' || !/^\d+$/.test(value.trim())) {
+    return NaN;
+  }
+  return Number(value);
+}
+
 function checkPrice(minPrice, maxPrice) {
   var priceFilter = null;
 
   if (typeof minPrice !== 'undefined') {
-    minPrice = parseFloat(minPrice);
-    if (isNaN(minPrice)) {
+    minPrice = parsePrice(minPrice);
+    if (!Number.isFinite(minPrice)) {
       return new APIError(400, 'Min price is not a number');
     }
 
@@ -247,8 +262,8 @@ function checkPrice(minPrice, maxPrice) {
   }
 
   if (typeof maxPrice !== 'undefined') {
-    maxPrice = parseFloat(maxPrice);
-    if (isNaN(maxPrice)) {
+    maxPrice = parsePrice(maxPrice);
+    if (!Number.isFinite(maxPrice)) {
       return new APIError(400, 'Max price is not a number');
     }
 
@@ -292,11 +307,11 @@ function checkPaging(rawLimit, rawSkip) {
   var skip = 0;
 
   if (typeof rawLimit !== 'undefined') {
-    limit = parseInt(rawLimit, 10);
+    limit = parsePagingInteger(rawLimit);
 
     // parseInt('abc') is NaN and the old `|| null` turned that into "no limit",
     // so a typo silently asked for the entire collection.
-    if (isNaN(limit) || limit < 1) {
+    if (!Number.isSafeInteger(limit) || limit < 1) {
       return new APIError(400, "'limit' must be a positive integer.");
     }
 
@@ -304,11 +319,11 @@ function checkPaging(rawLimit, rawSkip) {
   }
 
   if (typeof rawSkip !== 'undefined') {
-    skip = parseInt(rawSkip, 10);
+    skip = parsePagingInteger(rawSkip);
 
     // A negative skip makes the driver throw; catching it here keeps it a 400
     // instead of a 500.
-    if (isNaN(skip) || skip < 0) {
+    if (!Number.isSafeInteger(skip) || skip < 0) {
       return new APIError(400, "'skip' must be a non-negative integer.");
     }
   }

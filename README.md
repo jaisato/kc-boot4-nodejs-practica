@@ -231,3 +231,11 @@ API. El contador es por IP y vive en memoria del proceso, así que:
   compartido hace falta un store (Redis).
 - No es un bloqueo por cuenta: frena la fuerza bruta desde un origen, no una
   distribuida.
+
+## Pruebas de filtros de anuncios
+
+Ejecuta `npm test` con Node.js 18 o superior. Las pruebas usan HTTP en loopback
+y autenticación real, sustituyendo únicamente la consulta del modelo; no
+conectan a MongoDB ni inicializan datos. Los precios deben ser números decimales
+finitos completos; `limit` y `skip`, enteros seguros. Se rechazan parámetros
+repetidos, objetos, valores parciales y paginación fraccionaria con HTTP 400.
