@@ -74,6 +74,10 @@ const DUMMY_HASH = bcrypt.hashSync('user-does-not-exist', BCRYPT_ROUNDS);
  */
 const MAX_LOGIN_CANDIDATES = 3;
 
+// Plaintext password bounds, enforced at signup (see the /signup handler).
+const MIN_PASSWORD_LENGTH = 3;
+const MAX_PASSWORD_BYTES = 72;
+
 /**
  * Request bodies are JSON, so `{"email": {"$ne": null}}` arrives as an object
  * and Mongo treats it as an operator rather than a value. Every field that
@@ -163,6 +167,27 @@ router.post('/signup', signupLimiter, function(req, res, next) {
 
     if (!password) {
       throw new APIError(400, 'password is required.');
+    }
+
+    // The schema's `minlength` on `password` never protected anything: the
+    // document stores the bcrypt hash, which is always 60 characters, so a
+    // one-character password passed validation. The length rules have to be
+    // checked on the plaintext, here, before it is hashed.
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      throw new APIError(
+        400,
+        'password must be at least ' + MIN_PASSWORD_LENGTH + ' characters long.'
+      );
+    }
+
+    // bcrypt only reads the first 72 bytes and silently ignores the rest, so a
+    // longer password would be accepted and then any string sharing its first
+    // 72 bytes would log in as well. Refuse it instead of truncating quietly.
+    if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES) {
+      throw new APIError(
+        400,
+        'password must be at most ' + MAX_PASSWORD_BYTES + ' bytes long.'
+      );
     }
 
     if (!name) {
