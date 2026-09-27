@@ -9,7 +9,8 @@
     "start": "node ./bin/www",
     "dev": "DEBUG=Nodepop:* nodemon ./bin/www",
     "installDB": "node ./bin/install_db.js",
-    "migrate:unique-email": "node ./bin/ensure_unique_email_index.js"
+    "migrate:unique-email": "node ./bin/ensure_unique_email_index.js",
+    "test": "node --test"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
