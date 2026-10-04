@@ -137,6 +137,14 @@ La URI de MongoDB estaba fijada en el código, así que la aplicación solo pod�
 hablar con una base de datos en la misma máquina; ahora se puede apuntar a un
 servidor real sin tocar el código.
 
+Si MongoDB no responde al arrancar, la app lo registra y reintenta la conexión
+cada 5 segundos. Mientras tanto las rutas que usan la base de datos responden
+con error y el resto sigue funcionando. Antes, el rechazo de `mongoose.connect()`
+no lo manejaba nadie y tiraba el proceso primario y, con él, todo el cluster.
+Si un worker muere, el primario arranca otro. Si muere antes de llegar a
+escuchar (por ejemplo, porque el puerto está ocupado), el primario se detiene
+con código 1 en lugar de quedarse vivo sin workers.
+
 ## Security notice: rotate the JWT secret
 
 `lib/jwtAuth.js` used to carry the token-signing secret in plain text. Anyone

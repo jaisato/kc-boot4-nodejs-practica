@@ -35,6 +35,38 @@ if (cluster.isPrimary) {
     cluster.fork();
   }
 
+  // Nothing replaced a worker that died, so every crash permanently removed
+  // capacity, and once the last one was gone the primary stayed up serving
+  // nothing. A worker that had been serving is replaced. One that dies before
+  // it ever listened (the port is taken, say) would only die again, so the
+  // primary stops with an error instead of respawning it in a loop - or, as
+  // before, idling with no workers at all.
+  cluster.on('listening', function (worker) {
+    worker.hasListened = true;
+  });
+
+  cluster.on('exit', function (worker, code, signal) {
+    var reason = signal || code;
+
+    if (worker.exitedAfterDisconnect) {
+      return;
+    }
+
+    if (!worker.hasListened) {
+      console.error('Worker ' + worker.process.pid + ' exited (' + reason +
+        ') before it started listening; shutting down.');
+      for (var id in cluster.workers) {
+        cluster.workers[id].kill();
+      }
+      // exit() rather than exitCode: the primary also loaded the app, and its
+      // open MongoDB connection would keep the process alive otherwise.
+      process.exit(1);
+    }
+
+    console.error('Worker ' + worker.process.pid + ' died (' + reason + '); starting a new one.');
+    cluster.fork();
+  });
+
 } else {
   // Worker starting...
   /**
