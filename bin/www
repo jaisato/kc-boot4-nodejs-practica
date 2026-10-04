@@ -20,8 +20,15 @@ app.set('port', port);
  */
 var cluster = require('cluster');
 
-if (cluster.isMaster) {
-  // Workers creation in master...
+if (cluster.isPrimary) {
+  // The rate limiters' counters live here, shared by every worker over IPC
+  // (lib/rateLimitStore.js). Kept per worker, each one granted its own budget
+  // and the login limit grew with the number of CPUs.
+  var ClusterMemoryStorePrimary =
+    require('@express-rate-limit/cluster-memory-store').ClusterMemoryStorePrimary;
+  new ClusterMemoryStorePrimary().init();
+
+  // Workers creation in primary...
   var numCPUs = require('os').cpus().length;
 
   for (var i = 0; i < numCPUs; i++) {

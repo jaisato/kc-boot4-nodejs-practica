@@ -205,7 +205,7 @@ Ahora hay un presupuesto por IP (`express-rate-limit`):
 | `/apiv1/users/signup` | 1 h | 20 | |
 
 Al agotarse se devuelve `429` con el mismo formato de error que el resto de la
-API. El contador es por IP y vive en memoria del proceso, así que:
+API. El contador es por IP y vive en memoria, así que:
 
 - Detrás de un proxy hay que poner `TRUST_PROXY_HOPS` al número de proxies que
   hay delante (`TRUST_PROXY_HOPS=1` para uno). Sin eso Express toma como IP la
@@ -227,8 +227,17 @@ API. El contador es por IP y vive en memoria del proceso, así que:
   `X-Forwarded-For` puesta por el cliente pasaba a ser la clave del contador;
   `1.5` se quedaba en 1; y `foo` dejaba el ajuste apagado-. Vacío o sin definir
   sigue significando "sin proxy".
-- Con varias instancias, cada una lleva su propia cuenta; para un límite real
-  compartido hace falta un store (Redis).
+- `npm start` arranca un cluster con un worker por CPU. Los contadores los
+  guarda el proceso primario y los workers se los piden por IPC
+  (`@express-rate-limit/cluster-memory-store`, ver `lib/rateLimitStore.js`).
+  Antes cada worker llevaba su propia cuenta y el cluster reparte las
+  conexiones entre ellos, así que un cliente que abría una conexión nueva en
+  cada intento disponía de 10 intentos **por worker**: 80 en una máquina de 8
+  núcleos. Por eso tampoco se puede arrancar con PM2 en modo `cluster`, que se
+  queda con el papel de primario: con PM2 hay que usar `instances: 1` y
+  `exec_mode: 'fork'`.
+- Con varias máquinas o contenedores, cada uno lleva su propia cuenta; para un
+  límite real compartido entre ellos hace falta un store externo (Redis).
 - No es un bloqueo por cuenta: frena la fuerza bruta desde un origen, no una
   distribuida.
 

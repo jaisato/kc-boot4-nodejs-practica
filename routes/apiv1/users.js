@@ -12,6 +12,7 @@ var bcrypt = require('bcrypt');
 var APIError = require('../../lib/APIError');
 
 var rateLimit = require('express-rate-limit');
+var rateLimitStore = require('../../lib/rateLimitStore');
 
 /**
  * Neither endpoint had any request budget, so /login could be walked through a
@@ -24,6 +25,9 @@ var rateLimit = require('express-rate-limit');
  * stopping a distributed one; behind a proxy the app needs TRUST_PROXY_HOPS set for
  * that key to be the real client. Per-account lockout would need shared state
  * this app does not have.
+ *
+ * The counters are shared by every cluster worker (see lib/rateLimitStore.js);
+ * per-worker counters multiplied the budget by the number of CPUs.
  */
 var loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -33,6 +37,7 @@ var loginLimiter = rateLimit({
   // Only failed attempts count, so a client signing in normally is never
   // throttled by its own successful logins.
   skipSuccessfulRequests: true,
+  store: rateLimitStore('login'),
   handler: function (req, res, next) {
     next(new APIError(429, 'Too many login attempts. Try again later.'));
   }
@@ -41,6 +46,7 @@ var loginLimiter = rateLimit({
 var signupLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   limit: 20,
+  store: rateLimitStore('signup'),
   standardHeaders: true,
   legacyHeaders: false,
   handler: function (req, res, next) {
