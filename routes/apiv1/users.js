@@ -100,6 +100,17 @@ router.post('/login', loginLimiter, function(req, res, next) {
       throw new APIError(400, 'email and password are required.');
     }
 
+    // bcrypt only reads the first 72 bytes, and /signup accepts passwords of
+    // exactly that size. Without this check, anyone who knew such a password
+    // could log in with it plus any suffix, because the extra bytes were
+    // silently ignored by the comparison. No stored password can be longer, so
+    // a longer one is always wrong; the dummy comparison keeps the timing the
+    // same as any other failed attempt.
+    if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES) {
+      await bcrypt.compare(password.slice(0, MAX_PASSWORD_BYTES), DUMMY_HASH);
+      throw new APIError(401, 'Invalid credentials.');
+    }
+
     // At most MAX_LOGIN_CANDIDATES accounts are considered. The address is
     // unique going forward, so this is normally a single row; the limit bounds
     // the work for collections that already contain duplicates from before the
