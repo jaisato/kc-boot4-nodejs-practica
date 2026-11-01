@@ -213,6 +213,8 @@ router.get('/', function(req, res, next) {
     return next(sort);
   }
 
+  sort = withTieBreaker(sort);
+
   Ad.list(filter, sort, paging.limit, paging.skip, fields)
       .then(function(ads) {
         var baseUrl = photoBaseUrl(req);
@@ -372,6 +374,32 @@ function buildFields(fields) {
   }
 
   return requested.length > 0 ? requested.join(' ') : null;
+}
+
+/**
+ * Makes the order total, so limit/skip pages do not overlap or skip ads.
+ *
+ * Without a sort - or with one on a field many ads share, such as on_sale or a
+ * repeated price - Mongo returns ties in no defined order, and that order can
+ * change between two queries. Paging with skip over such a result returned the
+ * same ad on page 1 and page 2 while another never appeared. _id is unique and
+ * indexed, so appending it as the last key fixes the order at no extra cost.
+ *
+ * @param {string|null} sort the validated output of buildSort()
+ * @returns {string}
+ */
+function withTieBreaker(sort) {
+  if (!sort) {
+    return '_id';
+  }
+
+  var keys = sort.split(' ');
+
+  if (keys.indexOf('_id') !== -1 || keys.indexOf('-_id') !== -1) {
+    return sort;
+  }
+
+  return sort + ' _id';
 }
 
 /**

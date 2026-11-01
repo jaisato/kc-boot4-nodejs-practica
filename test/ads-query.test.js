@@ -52,3 +52,11 @@ test('preserves default paging and clamps valid large limits', async () => {
     response = await request('?limit=1000&skip=0'); await response.json();
     assert.equal(response.status, 200); assert.equal(calls.at(-1)[2], 100);
 });
+test('always sorts with _id as the last key so paging is stable', async () => {
+    const cases = [['', '_id'], ['?sort=price', 'price _id'], ['?sort=-price,name', '-price name _id'], ['?sort=-_id', '-_id']];
+    for (const [query, expected] of cases) {
+        const response = await request(query); await response.json();
+        assert.equal(response.status, 200);
+        assert.equal(calls.at(-1)[1], expected, query);
+    }
+});
