@@ -383,7 +383,8 @@ function buildFields(fields) {
  * repeated price - Mongo returns ties in no defined order, and that order can
  * change between two queries. Paging with skip over such a result returned the
  * same ad on page 1 and page 2 while another never appeared. _id is unique and
- * indexed, so appending it as the last key fixes the order at no extra cost.
+ * indexed, so appending it as the last key makes the order deterministic. Mongo may
+ * need an in-memory sort for it (no compound index ends in _id), fine at this size.
  *
  * @param {string|null} sort the validated output of buildSort()
  * @returns {string}
