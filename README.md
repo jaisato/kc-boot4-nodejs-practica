@@ -13,8 +13,8 @@ Y para arrancar el servidor ejecutar: **_npm start_**
 
 **NOTA:** `npm start` arranca con `node`, sin dependencias de desarrollo, de modo
 que funciona en un despliegue instalado con `npm install --omit=dev`. Para
-desarrollo con recarga automática está `npm run dev`, que usa _nodemon_ (incluido
-en las `devDependencies`).
+desarrollo con recarga automática está `npm run dev`, que usa `node --watch`
+(Node 18.11 o superior; ya no hace falta _nodemon_).
 
 ## Base de datos inicial
 Al ejecutar **_npm run installDB_**, el script *install_db.js* carga los datos que inicializan el base de datos en MongoDB.

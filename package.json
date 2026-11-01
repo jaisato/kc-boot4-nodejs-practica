@@ -3,11 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "engines": {
-    "node": ">=18"
+    "node": ">=18.11"
   },
   "scripts": {
     "start": "node ./bin/www",
-    "dev": "DEBUG=Nodepop:* nodemon ./bin/www",
+    "dev": "DEBUG=Nodepop:* node --watch ./bin/www",
     "installDB": "node ./bin/install_db.js",
     "migrate:unique-email": "node ./bin/ensure_unique_email_index.js",
     "test": "node --test"
@@ -17,19 +17,16 @@
     "body-parser": "^1.20.9",
     "cookie-parser": "^1.4.7",
     "debug": "^4.4.3",
-    "ejs": "^3.1.10",
+    "ejs": "^7.0.2",
     "express": "^4.22.2",
-    "express-rate-limit": "^8.6.2",
+    "express-rate-limit": "^8.7.2",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^8.24.3",
     "morgan": "^1.11.0",
     "serve-favicon": "^2.5.1"
   },
-  "devDependencies": {
-    "nodemon": "^3.1.14"
-  },
   "overrides": {
-    "qs": "^6.16.0"
+    "qs": "^6.16.1"
   },
   "//": [
     "overrides.qs: express 4 and body-parser 1 pin qs to ~6.15, and 6.15.3 is the",
@@ -39,6 +36,8 @@
     "installs express 5 - a breaking change this app is not ready for. The query",
     "parser is what every request goes through, so the patched line is forced for",
     "every dependant instead. Remove this once `npm ls qs` stops reporting",
-    "\"overridden\", which means express and body-parser require 6.16 on their own."
+    "\"overridden\", which means express and body-parser require 6.16 on their own.",
+    "The floor is 6.16.1: 6.16.0 still has the stringify DoS with arrayFormat",
+    "'comma' (GHSA-6pq8-jhm2-2vcw)."
   ]
 }
