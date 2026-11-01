@@ -95,7 +95,13 @@ app.use(function(req, res, next) {
 
 // error handlers
 
-var isDevelopment = app.get('env') === 'development';
+// Only when NODE_ENV says so explicitly. app.get('env') falls back to
+// 'development' when NODE_ENV is unset, and `npm start` - the way the README
+// starts the server - does not set it, so every deployment that followed the
+// docs answered each API error with its stack trace (file paths, module
+// versions) and echoed the message of unexpected 500s, driver internals
+// included.
+var isDevelopment = process.env.NODE_ENV === 'development';
 
 /**
  * Builds the JSON error body.
