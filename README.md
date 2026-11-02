@@ -74,7 +74,7 @@ Este servicio requiere de autenticación *(JSON web token)*.
 	* **minprice:** Float. *Busca los anuncios a partir del precio mínimo deseado. Ejemplo: 490.99*
 	* **maxprice:** Float. *Busca los anuncios a partir del precio máximo deseado. Ejemplo: 490.99*
 	* **onsale:** Boolean. *Busca los anuncios por tipo (en venta o búsqueda). Ejemplo: onsale: 1 (true)*
-	* **sort:** String. *Campos por los que ordenar (separados por coma o espacio), cada uno con `-` delante para orden descendente. Sólo se admiten los mismos campos que `fields`. Ejemplo: `-price,name`*
+	* **sort:** String. *Campos por los que ordenar (separados por coma o espacio), cada uno con `-` delante para orden descendente. Sólo se admiten los mismos campos que `fields`. Ejemplo: `-price,name`. Los empates se resuelven siempre por `_id`, en el sentido del último campo (`-price` ordena como `-price -_id`), para que paginar con `skip` no repita ni salte anuncios.*
 * **Resultado:** *objeto en formato JSON con el éxito de la petición (success) y los datos (data) o el error (error)*
 
 Si se produce un error en la petición la API devuelve un **error** en formato JSON. Si no, devuelve los anuncios encontrados en un array llamado **ads**.
