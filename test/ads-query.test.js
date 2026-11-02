@@ -52,11 +52,35 @@ test('preserves default paging and clamps valid large limits', async () => {
     response = await request('?limit=1000&skip=0'); await response.json();
     assert.equal(response.status, 200); assert.equal(calls.at(-1)[2], 100);
 });
-test('always sorts with _id as the last key so paging is stable', async () => {
-    const cases = [['', '_id'], ['?sort=price', 'price _id'], ['?sort=-price,name', '-price name _id'], ['?sort=-_id', '-_id']];
+test('always sorts with _id as the last key, in the direction of the key before it', async () => {
+    const cases = [
+        ['', '_id'], ['?sort=price', 'price _id'], ['?sort=-price', '-price -_id'],
+        ['?sort=-price,name', '-price name _id'], ['?sort=price,-name', 'price -name -_id'],
+        ['?sort=-_id', '-_id'], ['?sort=-price,_id', '-price _id']
+    ];
     for (const [query, expected] of cases) {
         const response = await request(query); await response.json();
         assert.equal(response.status, 200);
         assert.equal(calls.at(-1)[1], expected, query);
+    }
+});
+// What buildSort() accepts besides _id: SELECTABLE_FIELDS in routes/apiv1/ads.js.
+const SORT_FIELDS = ['name', 'price', 'on_sale', 'photo', 'tags'];
+test('SORT_FIELDS and _id are every sort key the API accepts', async () => {
+    const response = await request('?sort=nope');
+    assert.equal(response.status, 400);
+    const { error } = await response.json();
+    assert.ok(error.includes(`Allowed: ${['_id', ...SORT_FIELDS].join(', ')}, `), error);
+});
+test('every single-field sort has a {field: 1, _id: 1} index to walk, either way', async () => {
+    // Compared as JSON, not deepEqual: the order of its keys is what makes an index.
+    const indexes = Ad.schema.indexes().map(([keys]) => JSON.stringify(keys));
+    for (const field of SORT_FIELDS) {
+        assert.ok(indexes.includes(JSON.stringify({ [field]: 1, _id: 1 })), `no {${field}: 1, _id: 1} index`);
+        for (const [query, expected] of [[field, `${field} _id`], [`-${field}`, `-${field} -_id`]]) {
+            const response = await request(`?sort=${query}`); await response.json();
+            assert.equal(response.status, 200);
+            assert.equal(calls.at(-1)[1], expected, query);
+        }
     }
 });

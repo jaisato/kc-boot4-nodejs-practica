@@ -8,28 +8,40 @@ var mongoose = require('mongoose');
 // Define the Ad schema
 var adSchema = mongoose.Schema({
     name: {
-        type: String,
-        index: true
+        type: String
     },
     price: {
-        type: Number,
-        index: true
+        type: Number
     },
     on_sale: {
-        type: Boolean,
-        index: true
+        type: Boolean
     },
     photo: {
-        type: String,
-        index: true
+        type: String
     },
     tags: {
-        type: Array,
-        index: true
+        type: Array
     }
 });
 
 adSchema.index({ name: 1, price: 1, on_sale: 1, tags: 1 });
+
+/**
+ * One index per field the API sorts by (`?sort=` in routes/apiv1/ads.js), each
+ * ending in _id: withTieBreaker() appends _id to every sort, in the direction
+ * of the key before it, so Mongo reads `price _id` forwards and `-price -_id`
+ * backwards off {price: 1, _id: 1} instead of sorting the matches in memory.
+ *
+ * Each one also does what the single-field index its field used to declare
+ * (`index: true`) did, filtering on that field, so those are gone: MongoDB
+ * would only have kept up a redundant prefix of each. A database created
+ * earlier keeps them until `Ad.syncIndexes()` drops them.
+ */
+adSchema.index({ name: 1, _id: 1 });
+adSchema.index({ price: 1, _id: 1 });
+adSchema.index({ on_sale: 1, _id: 1 });
+adSchema.index({ photo: 1, _id: 1 });
+adSchema.index({ tags: 1, _id: 1 });
 
 /**
  * Lists ads.

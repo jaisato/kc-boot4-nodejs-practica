@@ -382,9 +382,16 @@ function buildFields(fields) {
  * Without a sort - or with one on a field many ads share, such as on_sale or a
  * repeated price - Mongo returns ties in no defined order, and that order can
  * change between two queries. Paging with skip over such a result returned the
- * same ad on page 1 and page 2 while another never appeared. _id is unique and
- * indexed, so appending it as the last key makes the order deterministic. Mongo may
- * need an in-memory sort for it (no compound index ends in _id), fine at this size.
+ * same ad on page 1 and page 2 while another never appeared. _id is unique, so
+ * appending it as the last key makes the order deterministic.
+ *
+ * It takes the direction of the key before it. models/Ad.js declares an index
+ * {field: 1, _id: 1} for every field buildSort() accepts, and Mongo walks it
+ * forwards for `price _id` and backwards for `-price -_id`; `-price _id` would
+ * match it in neither direction and be sorted in memory. No sort at all
+ * becomes `_id`, the order of the _id index. What still sorts in memory is a
+ * sort on two or more fields, which no index covers; there Mongo keeps only
+ * the skip + limit ads it is going to return, not the whole result.
  *
  * @param {string|null} sort the validated output of buildSort()
  * @returns {string}
@@ -400,7 +407,7 @@ function withTieBreaker(sort) {
     return sort;
   }
 
-  return sort + ' _id';
+  return sort + (keys[keys.length - 1].charAt(0) === '-' ? ' -_id' : ' _id');
 }
 
 /**
