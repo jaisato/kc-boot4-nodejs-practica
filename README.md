@@ -16,6 +16,15 @@ que funciona en un despliegue instalado con `npm install --omit=dev`. Para
 desarrollo con recarga automática está `npm run dev`, que usa `node --watch`
 (Node 18.11 o superior; ya no hace falta _nodemon_).
 
+`bin/www` arranca un proceso principal que sólo supervisa y un *worker* por
+CPU, que son los que cargan la app y conectan con MongoDB. Si un worker muere
+se arranca otro en su lugar; si en un minuto mueren más workers de los que hay
+(falta `JWT_SECRET`, MongoDB no responde al arrancar, el puerto está ocupado…)
+el fallo no es puntual y el proceso principal sale con código 1, para que lo
+reinicie quien lo supervise (systemd, Docker…) en vez de quedarse vivo sin
+nadie que atienda. Sin MongoDB al arrancar cada worker sale con un mensaje de
+una línea en lugar de morir por un rechazo de promesa no gestionado.
+
 ## Base de datos inicial
 Al ejecutar **_npm run installDB_**, el script *install_db.js* carga los datos que inicializan el base de datos en MongoDB.
 

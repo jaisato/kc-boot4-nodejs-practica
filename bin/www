@@ -4,36 +4,55 @@
  * Module dependencies.
  */
 
-var app = require('../app');
-var debug = require('debug')('Nodepop:server');
-var http = require('http');
+var cluster = require('cluster');
+var os = require('os');
 
 /**
- * Get port from environment and store in Express.
+ * How long a worker death is remembered when deciding whether the workers are
+ * crashing in a loop (see superviseWorkers).
+ */
+var CRASH_WINDOW_MS = 60 * 1000;
+
+/**
+ * Get port from environment.
  */
 
 var port = normalizePort(process.env.PORT || '3000');
-app.set('port', port);
+var server;
 
 /**
  * Cluster configuration
+ *
+ * The primary only forks and supervises the workers. It used to require
+ * ../app as well, before the fork, which opened a MongoDB connection pool in a
+ * process that never serves a request - and made the primary die along with
+ * every worker whenever that connection failed. The app is loaded by the
+ * workers alone now.
  */
-var cluster = require('cluster');
+if (cluster.isPrimary) {
+  // `cluster.isMaster` is the deprecated spelling of the same flag.
+  var numWorkers = typeof os.availableParallelism === 'function'
+    ? os.availableParallelism()
+    : os.cpus().length;
 
-if (cluster.isMaster) {
-  // Workers creation in master...
-  var numCPUs = require('os').cpus().length;
-
-  for (var i = 0; i < numCPUs; i++) {
+  for (var i = 0; i < numWorkers; i++) {
     cluster.fork();
   }
 
+  superviseWorkers(numWorkers);
+
 } else {
   // Worker starting...
+  var app = require('../app');
+  var debug = require('debug')('Nodepop:server');
+  var http = require('http');
+
+  app.set('port', port);
+
   /**
    * Create HTTP server.
    */
-  var server = http.createServer(app);
+  server = http.createServer(app);
 
   /**
    * Listen on provided port, on all network interfaces.
@@ -41,6 +60,53 @@ if (cluster.isMaster) {
   server.listen(port);
   server.on('error', onError);
   server.on('listening', onListening);
+}
+
+/**
+ * Replaces workers that die.
+ *
+ * Nothing listened for a worker exiting, so every crash permanently took one
+ * worker away. Once the last one was gone the primary was still running - so a
+ * process supervisor saw a healthy process and restarted nothing - while no
+ * worker was left to answer a single request.
+ *
+ * A worker that dies is forked again. When more workers die within
+ * CRASH_WINDOW_MS than the cluster has, the failure is not a one-off (missing
+ * JWT_SECRET, database unreachable at startup, port taken) and forking again
+ * would only loop, so the primary exits with code 1 and leaves the restart to
+ * whatever supervises it.
+ */
+function superviseWorkers(numWorkers) {
+  var recentCrashes = [];
+
+  cluster.on('exit', function (worker, code, signal) {
+    // Disconnected or killed by the primary itself: nothing to replace.
+    if (worker.exitedAfterDisconnect) {
+      return;
+    }
+
+    var now = Date.now();
+    var reason = signal ? 'signal ' + signal : 'code ' + code;
+
+    recentCrashes = recentCrashes.filter(function (at) {
+      return now - at < CRASH_WINDOW_MS;
+    });
+    recentCrashes.push(now);
+
+    if (recentCrashes.length > numWorkers) {
+      console.error(
+        'Worker %d exited (%s): %d worker exits in the last %d s, giving up.',
+        worker.process.pid, reason, recentCrashes.length, CRASH_WINDOW_MS / 1000
+      );
+      process.exit(1);
+    }
+
+    console.error(
+      'Worker %d exited (%s), starting a replacement.',
+      worker.process.pid, reason
+    );
+    cluster.fork();
+  });
 }
 
 /**
