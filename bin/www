@@ -35,6 +35,10 @@ if (cluster.isPrimary) {
     ? os.availableParallelism()
     : os.cpus().length;
 
+  // The login and sign-up limiters count in the primary, so their budget is
+  // per client for the whole host and not per worker (lib/rateLimitStore.js).
+  require('../lib/rateLimitStore').setupPrimary();
+
   for (var i = 0; i < numWorkers; i++) {
     cluster.fork();
   }
@@ -43,6 +47,8 @@ if (cluster.isPrimary) {
 
 } else {
   // Worker starting...
+  require('../lib/rateLimitStore').useSharedStore();
+
   var app = require('../app');
   var debug = require('debug')('Nodepop:server');
   var http = require('http');
