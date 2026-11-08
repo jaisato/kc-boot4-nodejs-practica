@@ -149,7 +149,7 @@ router.post('/login', loginLimiter, function(req, res, next) {
         var token = jwt.sign(
             {id: users[i]._id},
             jwtAuth.TOKEN_SECRET,
-            {expiresIn: '24h'}
+            {algorithm: jwtAuth.ALGORITHM, expiresIn: '24h'}
         );
 
         return res.json({success: true, token: token});
