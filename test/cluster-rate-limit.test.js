@@ -7,6 +7,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn, execFileSync } = require('node:child_process');
 const { randomBytes } = require('node:crypto');
+const { once } = require('node:events');
 const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
@@ -119,7 +120,8 @@ test(`the login budget is shared by the ${WORKERS} workers`, async () => {
 //
 // Made to happen on purpose: the primary is stopped so that a worker's question
 // stays unanswered in the pipe, the workers are killed, and the primary is let
-// go on - to find a question from a worker that is no longer there.
+// go on - to find a question from a worker that is no longer there. Nothing
+// here waits against the clock: each step is known to be over before the next.
 test('a worker that dies with a question to the primary pending does not take the cluster down', async () => {
     const primary = www.process.pid;
     const workers = execFileSync('pgrep', ['-P', String(primary)], { encoding: 'utf8' })
@@ -132,15 +134,19 @@ test('a worker that dies with a question to the primary pending does not take th
     try {
         await failedLogin(www.port, agent);
         process.kill(primary, 'SIGSTOP');
-        const unanswered = failedLogin(www.port, agent).catch(() => {});
-        // Time for the worker to ask, and then for the kernel to finish with
-        // the workers: until their end of the pipe is closed, an answer written
-        // to it still goes through.
-        await delay(300);
+        // The worker asks, gives the primary its second and refuses the
+        // attempt: its question is in the pipe by now, unanswered.
+        assert.equal(await failedLogin(www.port, agent), 500);
+
+        // That connection closing is the kernel being done with the worker,
+        // its end of the pipe included - until then an answer written to it
+        // still goes through.
+        const [connection] = Object.values(agent.freeSockets)
+            .concat(Object.values(agent.sockets)).flat();
+        const closed = connection.destroyed || once(connection, 'close');
         for (const pid of workers) process.kill(pid, 'SIGKILL');
-        await delay(300);
+        await closed;
         process.kill(primary, 'SIGCONT');
-        await unanswered;
 
         // Every worker is replaced, and the new ones serve.
         await listening(www, WORKERS * 2);
