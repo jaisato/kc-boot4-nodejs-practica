@@ -5,6 +5,7 @@ const { randomBytes } = require('node:crypto');
 process.env.JWT_SECRET = randomBytes(32).toString('hex');
 const express = require('express');
 const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 require('../models/User');
 const User = mongoose.model('User');
@@ -39,7 +40,10 @@ function login(password) {
 test('accepts the exact 72-byte password', async () => {
     const response = await login(PASSWORD);
     assert.equal(response.status, 200);
-    assert.equal((await response.json()).success, true);
+    const body = await response.json();
+    assert.equal(body.success, true);
+    // The algorithm checkToken() accepts, and only that one.
+    assert.equal(jwt.decode(body.token, { complete: true }).header.alg, 'HS256');
 });
 
 test('rejects the 72-byte password with extra bytes appended', async () => {

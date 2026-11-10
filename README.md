@@ -16,6 +16,15 @@ que funciona en un despliegue instalado con `npm install --omit=dev`. Para
 desarrollo con recarga automática está `npm run dev`, que usa `node --watch`
 (Node 18.11 o superior; ya no hace falta _nodemon_).
 
+`bin/www` arranca un proceso principal que sólo supervisa y un *worker* por
+CPU, que son los que cargan la app y conectan con MongoDB. Si un worker muere
+se arranca otro en su lugar; si en un minuto mueren más workers de los que hay
+(falta `JWT_SECRET`, MongoDB no responde al arrancar, el puerto está ocupado…)
+el fallo no es puntual y el proceso principal sale con código 1, para que lo
+reinicie quien lo supervise (systemd, Docker…) en vez de quedarse vivo sin
+nadie que atienda. Sin MongoDB al arrancar cada worker sale con un mensaje de
+una línea en lugar de morir por un rechazo de promesa no gestionado.
+
 ## Base de datos inicial
 Al ejecutar **_npm run installDB_**, el script *install_db.js* carga los datos que inicializan el base de datos en MongoDB.
 
@@ -205,7 +214,12 @@ Ahora hay un presupuesto por IP (`express-rate-limit`):
 | `/apiv1/users/signup` | 1 h | 20 | |
 
 Al agotarse se devuelve `429` con el mismo formato de error que el resto de la
-API. El contador es por IP y vive en memoria del proceso, así que:
+API. El contador es por IP y vive en memoria del proceso principal de
+`bin/www`, que lo comparte con todos sus workers por el canal IPC del cluster
+(`@express-rate-limit/cluster-memory-store`). Antes cada worker llevaba su
+propia cuenta y el reparto es round-robin por conexión, así que el límite real
+era 10 × número de CPU: bastaba con abrir una conexión nueva por intento. Aun
+así:
 
 - Detrás de un proxy hay que poner `TRUST_PROXY_HOPS` al número de proxies que
   hay delante (`TRUST_PROXY_HOPS=1` para uno). Sin eso Express toma como IP la
@@ -227,8 +241,14 @@ API. El contador es por IP y vive en memoria del proceso, así que:
   `X-Forwarded-For` puesta por el cliente pasaba a ser la clave del contador;
   `1.5` se quedaba en 1; y `foo` dejaba el ajuste apagado-. Vacío o sin definir
   sigue significando "sin proxy".
-- Con varias instancias, cada una lleva su propia cuenta; para un límite real
-  compartido hace falta un store (Redis).
+- Con varias instancias (varias máquinas o contenedores), cada una lleva su
+  propia cuenta; para un límite real compartido entre ellas hace falta un store
+  externo (Redis). Lo mismo si los workers los crea otro gestor (PM2 en modo
+  cluster): sin el primario de `bin/www` cada worker vuelve a contar por su
+  cuenta.
+- Si el proceso principal no contesta a un worker en un segundo (parado o
+  saturado), ese `login` o `signup` se rechaza con `500` en vez de pasar sin
+  contar: el límite falla cerrado.
 - No es un bloqueo por cuenta: frena la fuerza bruta desde un origen, no una
   distribuida.
 

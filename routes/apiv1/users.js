@@ -12,6 +12,7 @@ var bcrypt = require('bcrypt');
 var APIError = require('../../lib/APIError');
 
 var rateLimit = require('express-rate-limit');
+var rateLimitStore = require('../../lib/rateLimitStore');
 
 /**
  * Neither endpoint had any request budget, so /login could be walked through a
@@ -33,6 +34,9 @@ var loginLimiter = rateLimit({
   // Only failed attempts count, so a client signing in normally is never
   // throttled by its own successful logins.
   skipSuccessfulRequests: true,
+  // Shared by every worker of the cluster bin/www starts; see
+  // lib/rateLimitStore.js.
+  store: rateLimitStore.create('login'),
   handler: function (req, res, next) {
     next(new APIError(429, 'Too many login attempts. Try again later.'));
   }
@@ -43,6 +47,7 @@ var signupLimiter = rateLimit({
   limit: 20,
   standardHeaders: true,
   legacyHeaders: false,
+  store: rateLimitStore.create('signup'),
   handler: function (req, res, next) {
     next(new APIError(429, 'Too many sign-up attempts. Try again later.'));
   }
@@ -149,7 +154,7 @@ router.post('/login', loginLimiter, function(req, res, next) {
         var token = jwt.sign(
             {id: users[i]._id},
             jwtAuth.TOKEN_SECRET,
-            {expiresIn: '24h'}
+            {algorithm: jwtAuth.ALGORITHM, expiresIn: '24h'}
         );
 
         return res.json({success: true, token: token});
