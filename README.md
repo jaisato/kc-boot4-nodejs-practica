@@ -246,6 +246,9 @@ así:
   externo (Redis). Lo mismo si los workers los crea otro gestor (PM2 en modo
   cluster): sin el primario de `bin/www` cada worker vuelve a contar por su
   cuenta.
+- Si el proceso principal no contesta a un worker en un segundo (parado o
+  saturado), ese `login` o `signup` se rechaza con `500` en vez de pasar sin
+  contar: el límite falla cerrado.
 - No es un bloqueo por cuenta: frena la fuerza bruta desde un origen, no una
   distribuida.
 
