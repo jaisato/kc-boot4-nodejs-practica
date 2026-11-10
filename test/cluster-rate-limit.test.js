@@ -131,6 +131,13 @@ test('a worker that dies with a question to the primary pending does not take th
     // One connection, kept open: the worker that took it also gets the request
     // sent while the primary, which hands out new connections, is stopped.
     const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+    // Were this process killed with the primary stopped, nothing would ever let
+    // the primary go on, and it would sit there for good with its workers. This
+    // does it from outside, in a process group the test run does not take along.
+    const lifeline = spawn('sh', ['-c', `sleep 15; kill -CONT ${primary}`], {
+        stdio: 'ignore', detached: true
+    });
+    lifeline.unref();
     try {
         await failedLogin(www.port, agent);
         process.kill(primary, 'SIGSTOP');
@@ -156,6 +163,7 @@ test('a worker that dies with a question to the primary pending does not take th
     } finally {
         agent.destroy();
         if (!exited(www)) process.kill(primary, 'SIGCONT');
+        try { process.kill(-lifeline.pid, 'SIGKILL'); } catch { /* already gone */ }
     }
 });
 
