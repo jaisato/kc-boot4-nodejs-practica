@@ -1,6 +1,8 @@
 'use strict';
 // Starts the real bin/www (primary plus one worker per CPU) and checks that the
-// login budget is per client for the whole cluster, not per worker.
+// login budget is per client for the whole cluster, not per worker - and that
+// sharing it, which has the primary and the workers talking to each other for
+// the first time, does not give the cluster new ways to fall over.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
@@ -10,10 +12,16 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 
-const WORKERS = os.availableParallelism();
+const BIN_WWW = path.join(__dirname, '..', 'bin', 'www');
+// The same count bin/www makes.
+const WORKERS = typeof os.availableParallelism === 'function'
+    ? os.availableParallelism()
+    : os.cpus().length;
 const LOGIN_LIMIT = 10;
 
-let child, port;
+let www;
+
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function freePort() {
     return new Promise((resolve, reject) => {
@@ -25,12 +33,15 @@ function freePort() {
     });
 }
 
-before(async () => {
-    port = await freePort();
-    child = spawn(process.execPath, [path.join(__dirname, '..', 'bin', 'www')], {
+// Runs `args` with node in a process group of its own, listening on a free
+// port, and keeps what it writes to stderr: every worker announces itself there
+// through debug(), and the primary reports the workers it replaces.
+async function launch(args) {
+    const launched = { port: await freePort(), output: '' };
+    launched.process = spawn(process.execPath, args, {
         env: {
             ...process.env,
-            PORT: String(port),
+            PORT: String(launched.port),
             JWT_SECRET: randomBytes(32).toString('hex'),
             DEBUG: 'Nodepop:server',
             // Nothing here reaches the database; the long timeout only keeps the
@@ -40,30 +51,41 @@ before(async () => {
         stdio: ['ignore', 'ignore', 'pipe'],
         detached: true
     });
+    launched.process.stderr.on('data', chunk => { launched.output += chunk; });
+    return launched;
+}
 
-    // Every worker announces itself on stderr through debug().
-    await new Promise((resolve, reject) => {
-        let listening = 0, output = '';
-        const timer = setTimeout(() => reject(new Error('bin/www did not start:\n' + output)), 15000);
-        child.stderr.on('data', chunk => {
-            output += chunk;
-            listening = (output.match(/Listening on port/g) || []).length;
-            if (listening >= WORKERS) { clearTimeout(timer); resolve(); }
-        });
-        child.once('exit', code => { clearTimeout(timer); reject(new Error(`bin/www exited with ${code}:\n${output}`)); });
-    });
-});
+function exited(launched) {
+    return launched.process.exitCode !== null || launched.process.signalCode !== null;
+}
 
-after(() => {
-    if (child && child.exitCode === null) {
-        // The whole process group: the primary and its workers.
-        process.kill(-child.pid, 'SIGKILL');
+// Waits until `count` workers have announced that they are listening.
+async function listening(launched, count) {
+    const deadline = Date.now() + 15000;
+    while ((launched.output.match(/Listening on port/g) || []).length < count) {
+        if (exited(launched)) throw new Error('the process exited:\n' + launched.output);
+        if (Date.now() > deadline) throw new Error(`fewer than ${count} workers listening:\n` + launched.output);
+        await delay(50);
     }
+}
+
+function stop(launched) {
+    if (launched && !exited(launched)) {
+        // The whole process group: the primary and its workers.
+        process.kill(-launched.process.pid, 'SIGKILL');
+    }
+}
+
+before(async () => {
+    www = await launch([BIN_WWW]);
+    await listening(www, WORKERS);
 });
+
+after(() => stop(www));
 
 // A new connection per request, so the cluster hands consecutive attempts to
 // different workers the way a client opening fresh connections would.
-function failedLogin() {
+function failedLogin(port) {
     return new Promise((resolve, reject) => {
         const request = http.request({
             host: '127.0.0.1', port, path: '/apiv1/users/login', method: 'POST',
@@ -74,10 +96,37 @@ function failedLogin() {
     });
 }
 
-test(`the login budget is shared by the ${WORKERS} workers`, async () => {
+async function failedLogins(port, count) {
     const statuses = [];
-    for (let i = 0; i <= LOGIN_LIMIT; i++) {
-        statuses.push(await failedLogin());
+    for (let i = 0; i < count; i++) {
+        statuses.push(await failedLogin(port));
     }
-    assert.deepEqual(statuses, [...Array(LOGIN_LIMIT).fill(400), 429]);
+    return statuses;
+}
+
+test(`the login budget is shared by the ${WORKERS} workers`, async () => {
+    assert.deepEqual(
+        await failedLogins(www.port, LOGIN_LIMIT + 1),
+        [...Array(LOGIN_LIMIT).fill(400), 429]
+    );
+});
+
+// PM2 in cluster mode, like any other manager that forks bin/www itself, is a
+// primary that knows nothing about the counters: a worker asking it would wait
+// a second for an answer that never comes and refuse every login and sign-up
+// with a 500. Such a worker has to keep its own count instead.
+test('a worker forked by another cluster manager keeps its own budget', async t => {
+    // execArgv: or the worker would be started with this same `-e` script.
+    const manager = await launch(['-e', `
+        const cluster = require('node:cluster');
+        cluster.setupPrimary({ exec: process.argv[1], execArgv: [] });
+        cluster.fork();
+    `, BIN_WWW]);
+    t.after(() => stop(manager));
+    await listening(manager, 1);
+
+    assert.deepEqual(
+        await failedLogins(manager.port, LOGIN_LIMIT + 1),
+        [...Array(LOGIN_LIMIT).fill(400), 429]
+    );
 });

@@ -46,7 +46,8 @@ if (cluster.isPrimary) {
   superviseWorkers(numWorkers);
 
 } else {
-  // Worker starting...
+  // Worker starting... It shares the counters only if the primary above is
+  // what forked it; under another cluster manager it keeps its own.
   require('../lib/rateLimitStore').useSharedStore();
 
   var app = require('../app');
