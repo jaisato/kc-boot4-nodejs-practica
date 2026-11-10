@@ -5,7 +5,7 @@
 // the first time, does not give the cluster new ways to fall over.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const { randomBytes } = require('node:crypto');
 const http = require('node:http');
 const net = require('node:net');
@@ -85,11 +85,11 @@ after(() => stop(www));
 
 // A new connection per request, so the cluster hands consecutive attempts to
 // different workers the way a client opening fresh connections would.
-function failedLogin(port) {
+function failedLogin(port, agent = false) {
     return new Promise((resolve, reject) => {
         const request = http.request({
             host: '127.0.0.1', port, path: '/apiv1/users/login', method: 'POST',
-            agent: false, headers: { 'Content-Type': 'application/json' }
+            agent, headers: { 'Content-Type': 'application/json' }
         }, response => { response.resume(); response.on('end', () => resolve(response.statusCode)); });
         request.on('error', reject);
         request.end('{}');
@@ -109,6 +109,48 @@ test(`the login budget is shared by the ${WORKERS} workers`, async () => {
         await failedLogins(www.port, LOGIN_LIMIT + 1),
         [...Array(LOGIN_LIMIT).fill(400), 429]
     );
+});
+
+// The primary answers every worker that asks it for a counter. When the worker
+// has died in the meantime the answer cannot be written, and cluster reports
+// that as an 'error' event on the worker: with nobody listening it was an
+// uncaught exception in the primary, so one worker dying at the wrong moment
+// took the primary, and with it every other worker, down.
+//
+// Made to happen on purpose: the primary is stopped so that a worker's question
+// stays unanswered in the pipe, the workers are killed, and the primary is let
+// go on - to find a question from a worker that is no longer there.
+test('a worker that dies with a question to the primary pending does not take the cluster down', async () => {
+    const primary = www.process.pid;
+    const workers = execFileSync('pgrep', ['-P', String(primary)], { encoding: 'utf8' })
+        .split('\n').filter(Boolean).map(Number);
+    assert.equal(workers.length, WORKERS);
+
+    // One connection, kept open: the worker that took it also gets the request
+    // sent while the primary, which hands out new connections, is stopped.
+    const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+    try {
+        await failedLogin(www.port, agent);
+        process.kill(primary, 'SIGSTOP');
+        const unanswered = failedLogin(www.port, agent).catch(() => {});
+        // Time for the worker to ask, and then for the kernel to finish with
+        // the workers: until their end of the pipe is closed, an answer written
+        // to it still goes through.
+        await delay(300);
+        for (const pid of workers) process.kill(pid, 'SIGKILL');
+        await delay(300);
+        process.kill(primary, 'SIGCONT');
+        await unanswered;
+
+        // Every worker is replaced, and the new ones serve.
+        await listening(www, WORKERS * 2);
+        assert.match(String(await failedLogin(www.port)), /^4(00|29)$/);
+        // And the primary did meet the answer it could not deliver.
+        assert.match(www.output, /a message could not be delivered/);
+    } finally {
+        agent.destroy();
+        if (!exited(www)) process.kill(primary, 'SIGCONT');
+    }
 });
 
 // PM2 in cluster mode, like any other manager that forks bin/www itself, is a

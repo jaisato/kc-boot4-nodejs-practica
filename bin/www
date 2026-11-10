@@ -39,6 +39,8 @@ if (cluster.isPrimary) {
   // per client for the whole host and not per worker (lib/rateLimitStore.js).
   require('../lib/rateLimitStore').setupPrimary();
 
+  cluster.on('fork', tolerateUndeliveredMessages);
+
   for (var i = 0; i < numWorkers; i++) {
     cluster.fork();
   }
@@ -113,6 +115,35 @@ function superviseWorkers(numWorkers) {
       worker.process.pid, reason
     );
     cluster.fork();
+  });
+}
+
+/**
+ * Keeps a message that could not be delivered to a worker from ending the
+ * primary.
+ *
+ * The primary answers its workers now (the rate-limit counters), and an answer
+ * to a worker that has just died cannot be written. cluster reports that as an
+ * 'error' event on the worker, and an 'error' event nobody listens for is an
+ * uncaught exception: a worker dying with a question pending took the primary
+ * down, and every other worker with it. The worker's own exit is what gets it
+ * replaced (superviseWorkers), so all there is to do here is say so. Any other
+ * error on a worker - it could not be spawned at all - stays as fatal as it
+ * was.
+ */
+function tolerateUndeliveredMessages(worker) {
+  worker.on('error', function (err) {
+    var undelivered = err &&
+      (err.syscall === 'write' || err.code === 'ERR_IPC_CHANNEL_CLOSED');
+
+    if (!undelivered) {
+      throw err;
+    }
+
+    console.error(
+      'Worker %d: a message could not be delivered (%s).',
+      worker.process.pid, err.code
+    );
   });
 }
 
