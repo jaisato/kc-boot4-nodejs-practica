@@ -90,10 +90,11 @@ if (cluster.isPrimary) {
  */
 function superviseWorkers(numWorkers) {
   var recentCrashes = [];
+  var givenUp = false;
 
   cluster.on('exit', function (worker, code, signal) {
     // Disconnected or killed by the primary itself: nothing to replace.
-    if (worker.exitedAfterDisconnect) {
+    if (givenUp || worker.exitedAfterDisconnect) {
       return;
     }
 
@@ -110,7 +111,9 @@ function superviseWorkers(numWorkers) {
         'Worker %d exited (%s): %d worker exits in the last %d s, giving up.',
         worker.process.pid, reason, recentCrashes.length, CRASH_WINDOW_MS / 1000
       );
-      process.exit(1);
+      givenUp = true;
+      stopWorkers();
+      return;
     }
 
     console.error(
@@ -119,6 +122,43 @@ function superviseWorkers(numWorkers) {
     );
     cluster.fork();
   });
+}
+
+/**
+ * Ends the cluster once the primary has given up: stops the workers that are
+ * left and exits with code 1 when the last of them has gone.
+ *
+ * The primary used to exit on the spot. The workers it had just forked were
+ * still loading the app and found out on their own: each got as far as asking
+ * to listen, tripped over the channel to a primary that was no longer there
+ * and died with a `write EPIPE` stack trace - printed after the line that
+ * said why the cluster was stopping, and looking like one more failure.
+ *
+ * SIGKILL: a worker that is still starting has nothing to finish, and one that
+ * was serving was cut off just the same when the primary exited under it.
+ */
+function stopWorkers() {
+  var alive = Object.keys(cluster.workers).filter(function (id) {
+    return !cluster.workers[id].isDead();
+  });
+
+  function exitWhenAlone() {
+    if (alive.length === 0) {
+      process.exit(1);
+    }
+  }
+
+  cluster.on('exit', function (worker) {
+    alive = alive.filter(function (id) {
+      return id !== String(worker.id);
+    });
+    exitWhenAlone();
+  });
+
+  alive.forEach(function (id) {
+    cluster.workers[id].process.kill('SIGKILL');
+  });
+  exitWhenAlone();
 }
 
 /**
