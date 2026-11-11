@@ -1,11 +1,13 @@
 'use strict';
 // Starts the real bin/www in the ways it can fail to start - the port taken,
 // workers that die before they are up - and checks what that leaves the
-// operator with: a line saying why, exit code 1 and no process behind.
+// operator with: a line saying why, exit code 1 and no process behind. And
+// that it does not give up on a cluster that is serving.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const { randomBytes } = require('node:crypto');
+const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
@@ -17,7 +19,8 @@ const WORKERS = typeof os.availableParallelism === 'function'
     : os.cpus().length;
 
 // Evaluated in front of bin/www, in the primary and - cluster starts them with
-// the same arguments - in every worker: how these tests make workers fail.
+// the same arguments - in every worker: how these tests make workers fail, and
+// how they give them what there is none of here, time and a database.
 const SABOTAGE = `
     const cluster = require('node:cluster');
 
@@ -28,6 +31,23 @@ const SABOTAGE = `
         const primary = process.ppid;
         const nothing = new Int32Array(new SharedArrayBuffer(4));
         while (process.ppid === primary) Atomics.wait(nothing, 0, 0, 10);
+    }
+
+    // The primary's clock, a minute further on every time it is looked at:
+    // however fast workers die, to the primary they die less than once a minute.
+    if (cluster.isPrimary && process.env.TEST_SLOW_DEATHS) {
+        const now = Date.now;
+        let ahead = 0;
+        Date.now = () => now() + (ahead += 61000);
+    }
+
+    // A database that answers, for the workers up to this one.
+    if (cluster.isWorker && cluster.worker.id <= Number(process.env.TEST_DATABASE_UP_TO)) {
+        const mongoose = require(${JSON.stringify(require.resolve('mongoose'))});
+        mongoose.connect = () => {
+            process.nextTick(() => mongoose.connection.emit('open'));
+            return Promise.resolve(mongoose);
+        };
     }
 
     require(process.argv[1]);
@@ -83,11 +103,45 @@ function stop(launched) {
 async function until(launched, what, condition) {
     const deadline = Date.now() + 20000;
     while (!condition()) {
+        if (launched.ended) {
+            throw new Error(`${what}: it ended instead.\n${launched.output}`);
+        }
         if (Date.now() > deadline) {
             throw new Error(`${what}: not after 20 s.\n${launched.output}`);
         }
         await delay(20);
     }
+}
+
+// The workers a primary has right now.
+function workers(launched) {
+    return execFileSync('pgrep', ['-P', String(launched.process.pid)], { encoding: 'utf8' })
+        .split('\n').filter(Boolean).map(Number);
+}
+
+// How many workers have said they are listening, and of how many the primary
+// has said that they have started: both through debug(), on stderr.
+function listening(launched) {
+    return (launched.output.match(/Listening on port/g) || []).length;
+}
+
+function started(launched) {
+    return (launched.output.match(/Worker \d+ started/g) || []).length;
+}
+
+// An attempt to sign in with nothing: what a worker that is serving answers.
+// On the port of the last worker to say it was listening: asked for any free
+// port, a cluster gets another one each time it is left without workers.
+function failedLogin(launched) {
+    const port = Number(launched.output.match(/Listening on port (\d+)/g).pop().match(/\d+/)[0]);
+    return new Promise((resolve, reject) => {
+        const request = http.request({
+            host: '127.0.0.1', port, path: '/apiv1/users/login', method: 'POST',
+            agent: false, headers: { 'Content-Type': 'application/json' }
+        }, response => { response.resume(); response.on('end', () => resolve(response.statusCode)); });
+        request.on('error', reject);
+        request.end('{}');
+    });
 }
 
 // Somebody else listening where bin/www is going to be told to.
@@ -150,4 +204,78 @@ test('when the primary gives up the workers still starting go with it, quietly',
     // Why it stops is the last thing said: no worker adds anything to it.
     assert.match(www.output, /giving up\.\n$/);
     assert.doesNotMatch(www.output, /EPIPE/);
+});
+
+// All the primary used to count was worker deaths in the last minute. Workers
+// that die more slowly than that never added up: with a database that takes a
+// minute to give up on, each round of workers listened, waited, died and was
+// replaced, for ever, and nobody ever got to serve anything.
+//
+// The workers here have no database either - they listen and get no further -
+// and by the primary's clock every death is a minute after the one before.
+test('workers that keep failing to start end the cluster, however slowly they fail', async t => {
+    const www = launch(['-e', SABOTAGE, BIN_WWW], { TEST_SLOW_DEATHS: '1' });
+    t.after(() => stop(www));
+
+    await until(www, 'the workers listening', () => listening(www) >= WORKERS);
+    for (const pid of workers(www)) process.kill(pid, 'SIGKILL');
+    await until(www, 'their replacements listening', () => listening(www) >= WORKERS * 2);
+    // One more than the cluster has, and not one of them had started.
+    process.kill(workers(www)[0], 'SIGKILL');
+
+    await until(www, 'bin/www ending', () => www.ended);
+    assert.equal(www.code, 1);
+    assert.match(www.output, /workers in a row have failed to start and none is up, giving up\.\n$/);
+});
+
+// The other side of it: a worker that had started - it was listening, and it
+// had its database - is a worker to replace when it dies, as many times as it
+// happens. Every worker here dies after it has started, twice over: more deaths
+// than the cluster has workers, a minute apart by the primary's clock.
+test('workers that die after they had started are replaced, however many do', async t => {
+    const www = launch(['-e', SABOTAGE, BIN_WWW], {
+        TEST_SLOW_DEATHS: '1', TEST_DATABASE_UP_TO: 'Infinity'
+    });
+    t.after(() => stop(www));
+
+    for (const round of [1, 2]) {
+        await until(www, 'the workers starting', () => started(www) >= WORKERS * round);
+        for (const pid of workers(www)) process.kill(pid, 'SIGKILL');
+    }
+
+    await until(www, 'the last replacements starting', () => started(www) >= WORKERS * 3);
+    assert.equal(await failedLogin(www), 400);
+});
+
+// And why "none is up" is part of it. With the cluster serving, replacements
+// that cannot start - the database went away after the others had connected -
+// are no reason to take down the workers that are still there, which will have
+// their database back on their own when it returns.
+//
+// Only the first workers get a database here. All but one of them die, and then
+// so do their replacements, which listen and get no further, round after round
+// until more have failed to start in a row than the cluster has workers.
+test('failed starts do not end a cluster that still has a worker up', {
+    skip: WORKERS < 2 && 'needs one worker to stay up while others fail to start'
+}, async t => {
+    const www = launch(['-e', SABOTAGE, BIN_WWW], {
+        TEST_SLOW_DEATHS: '1', TEST_DATABASE_UP_TO: String(WORKERS)
+    });
+    t.after(() => stop(www));
+
+    await until(www, 'the workers starting', () => started(www) >= WORKERS);
+    const survivor = workers(www)[0];
+
+    let replaced = 0;
+    for (let failedStarts = 0, round = 0; failedStarts <= WORKERS; round++) {
+        for (const pid of workers(www)) {
+            if (pid !== survivor) process.kill(pid, 'SIGKILL');
+        }
+        // The first to go had started; none of the ones after them.
+        if (round > 0) failedStarts += WORKERS - 1;
+        replaced += WORKERS - 1;
+        await until(www, 'the replacements listening', () => listening(www) >= WORKERS + replaced);
+    }
+
+    assert.equal(await failedLogin(www), 400);
 });

@@ -6,12 +6,18 @@
 
 var cluster = require('cluster');
 var os = require('os');
+var debug = require('debug')('Nodepop:server');
 
 /**
  * How long a worker death is remembered when deciding whether the workers are
  * crashing in a loop (see superviseWorkers).
  */
 var CRASH_WINDOW_MS = 60 * 1000;
+
+/**
+ * What a worker tells the primary once it has started (reportStarted).
+ */
+var STARTED = 'started';
 
 /**
  * Get port from environment.
@@ -56,7 +62,6 @@ if (cluster.isPrimary) {
   require('../lib/rateLimitStore').useSharedStore();
 
   var app = require('../app');
-  var debug = require('debug')('Nodepop:server');
   var http = require('http');
 
   app.set('port', port);
@@ -65,6 +70,8 @@ if (cluster.isPrimary) {
    * Create HTTP server.
    */
   server = http.createServer(app);
+
+  reportStarted();
 
   /**
    * Listen on provided port, on all network interfaces.
@@ -82,17 +89,53 @@ if (cluster.isPrimary) {
  * process supervisor saw a healthy process and restarted nothing - while no
  * worker was left to answer a single request.
  *
- * A worker that dies is forked again. When more workers die within
- * CRASH_WINDOW_MS than the cluster has, the failure is not a one-off (missing
- * JWT_SECRET, database unreachable at startup) and forking again would only
- * loop, so the primary exits with code 1 and leaves the restart to whatever
- * supervises it.
+ * A worker that dies is forked again, unless forking again would only loop.
+ * Then the primary stops (stopWorkers) and exits with code 1, and leaves the
+ * restart to whatever supervises it. Two things tell it so:
+ *
+ * - More workers die within CRASH_WINDOW_MS than the cluster has. That is a
+ *   burst, whatever the workers were doing: it also covers the worker that
+ *   starts and dies at once, over and over.
+ *
+ * - More workers in a row than the cluster has die without having started,
+ *   and none is up. That is a start that does not work (missing JWT_SECRET,
+ *   database unreachable), however long each worker takes to fail at it. The
+ *   minute above cannot see it when they take long: with no database a worker
+ *   listens, waits for as long as serverSelectionTimeoutMS says and dies, and
+ *   at a minute or more per round the deaths never added up - the primary
+ *   went on replacing workers for ever, with nobody serving. Counted like
+ *   this, it ends after two rounds.
+ *
+ *   Started is what the worker says it is (reportStarted): listening does not
+ *   tell, because the worker with no database listens too. And "none is up"
+ *   because a worker that is serving is worth more than a clean exit: if the
+ *   database goes away with the cluster running, a worker that dies cannot be
+ *   replaced until it is back, but the ones still there get their connection
+ *   again on their own.
  */
 function superviseWorkers(numWorkers) {
   var recentCrashes = [];
+  // The workers that have started and are still alive, by id.
+  var up = {};
+  // How many workers in a row have died without having started.
+  var failedStarts = 0;
   var givenUp = false;
 
+  cluster.on('message', function (worker, message) {
+    // A worker that said so with its last breath can be heard after its exit
+    // has been dealt with: taken at its word it would be up for ever.
+    if (message && message.nodepop === STARTED && !worker.isDead()) {
+      up[worker.id] = true;
+      failedStarts = 0;
+      debug('Worker %d started', worker.process.pid);
+    }
+  });
+
   cluster.on('exit', function (worker, code, signal) {
+    var hadStarted = up[worker.id] === true;
+
+    delete up[worker.id];
+
     // Disconnected or killed by the primary itself: nothing to replace.
     if (givenUp || worker.exitedAfterDisconnect) {
       return;
@@ -105,6 +148,20 @@ function superviseWorkers(numWorkers) {
       return now - at < CRASH_WINDOW_MS;
     });
     recentCrashes.push(now);
+
+    if (!hadStarted) {
+      failedStarts++;
+    }
+
+    if (failedStarts > numWorkers && Object.keys(up).length === 0) {
+      console.error(
+        'Worker %d exited (%s): %d workers in a row have failed to start and none is up, giving up.',
+        worker.process.pid, reason, failedStarts
+      );
+      givenUp = true;
+      stopWorkers();
+      return;
+    }
 
     if (recentCrashes.length > numWorkers) {
       console.error(
@@ -188,6 +245,34 @@ function tolerateUndeliveredMessages(worker) {
       worker.process.pid, err.code
     );
   });
+}
+
+/**
+ * In a worker: tells the primary when this one has started, which is when it
+ * is listening and has its connection to the database, whichever comes last.
+ *
+ * It is what the primary goes by to tell a worker that died from one that
+ * never got going (superviseWorkers). Under another cluster manager the
+ * message goes to a primary that makes nothing of it.
+ */
+function reportStarted() {
+  var pending = 2;
+
+  function one() {
+    if (--pending > 0) {
+      return;
+    }
+
+    process.send({nodepop: STARTED}, function (err) {
+      // Not delivered means the primary is gone, and this worker with it.
+      if (err) {
+        debug('Could not tell the primary that this worker has started: %s', err.message);
+      }
+    });
+  }
+
+  server.once('listening', one);
+  require('../lib/mongoConnection').once('open', one);
 }
 
 /**

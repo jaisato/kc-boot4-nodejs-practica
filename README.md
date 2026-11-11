@@ -22,14 +22,30 @@ ninguno prueba el puerto: si está ocupado o exige privilegios lo dice en una
 línea (`Port 3000 is already in use`) y sale con código 1, sin llegar a
 arrancar workers.
 
-Si un worker muere se arranca otro en su lugar; si en un minuto mueren más
-workers de los que hay (falta `JWT_SECRET`, MongoDB no responde al arrancar…)
-el fallo no es puntual: el proceso principal lo dice, detiene a los workers
-que queden -también a los que estaban arrancando, que antes morían después
-con una traza `write EPIPE` cada uno- y sale con código 1, para que lo
-reinicie quien lo supervise (systemd, Docker…) en vez de quedarse vivo sin
-nadie que atienda. Sin MongoDB al arrancar cada worker sale con un mensaje de
-una línea en lugar de morir por un rechazo de promesa no gestionado.
+Si un worker muere se arranca otro en su lugar, salvo que hacerlo sólo sirva
+para repetir el fallo. El proceso principal se rinde en dos casos:
+
+- **Mueren en un minuto más workers de los que hay.** Es una ráfaga, hicieran
+  lo que hicieran los workers; cubre también al que arranca y cae al momento,
+  una y otra vez.
+- **Fallan al arrancar más workers seguidos de los que hay y no queda ninguno
+  en marcha.** Es un arranque que no funciona (falta `JWT_SECRET`, MongoDB no
+  responde), tarde lo que tarde cada worker en fallar. Un worker ha arrancado
+  cuando escucha y tiene su conexión con MongoDB: sin base de datos escucha
+  igual, espera lo que diga `serverSelectionTimeoutMS` y muere, de modo que
+  con esperas de un minuto o más el primer criterio no llegaba a saltar y el
+  proceso principal reemplazaba workers indefinidamente sin que nadie
+  atendiera. Contado así termina a la segunda tanda. Mientras quede un worker
+  en marcha no se rinde por arranques fallidos: si MongoDB cae con el servicio
+  en pie, los workers que siguen vivos recuperan la conexión solos cuando
+  vuelve.
+
+Al rendirse lo dice, detiene a los workers que queden -también a los que
+estaban arrancando, que antes morían después con una traza `write EPIPE` cada
+uno- y sale con código 1, para que lo reinicie quien lo supervise (systemd,
+Docker…) en vez de quedarse vivo sin nadie que atienda. Sin MongoDB al
+arrancar cada worker sale con un mensaje de una línea en lugar de morir por un
+rechazo de promesa no gestionado.
 
 ## Base de datos inicial
 Al ejecutar **_npm run installDB_**, el script *install_db.js* carga los datos que inicializan el base de datos en MongoDB.
