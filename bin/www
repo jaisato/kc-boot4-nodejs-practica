@@ -35,17 +35,20 @@ if (cluster.isPrimary) {
     ? os.availableParallelism()
     : os.cpus().length;
 
-  // The login and sign-up limiters count in the primary, so their budget is
-  // per client for the whole host and not per worker (lib/rateLimitStore.js).
-  require('../lib/rateLimitStore').setupPrimary();
+  // No worker until the port is known to be there to listen on.
+  whenPortIsFree(function () {
+    // The login and sign-up limiters count in the primary, so their budget is
+    // per client for the whole host and not per worker (lib/rateLimitStore.js).
+    require('../lib/rateLimitStore').setupPrimary();
 
-  cluster.on('fork', tolerateUndeliveredMessages);
+    cluster.on('fork', tolerateUndeliveredMessages);
 
-  for (var i = 0; i < numWorkers; i++) {
-    cluster.fork();
-  }
+    for (var i = 0; i < numWorkers; i++) {
+      cluster.fork();
+    }
 
-  superviseWorkers(numWorkers);
+    superviseWorkers(numWorkers);
+  });
 
 } else {
   // Worker starting... It shares the counters only if the primary above is
@@ -81,9 +84,9 @@ if (cluster.isPrimary) {
  *
  * A worker that dies is forked again. When more workers die within
  * CRASH_WINDOW_MS than the cluster has, the failure is not a one-off (missing
- * JWT_SECRET, database unreachable at startup, port taken) and forking again
- * would only loop, so the primary exits with code 1 and leaves the restart to
- * whatever supervises it.
+ * JWT_SECRET, database unreachable at startup) and forking again would only
+ * loop, so the primary exits with code 1 and leaves the restart to whatever
+ * supervises it.
  */
 function superviseWorkers(numWorkers) {
   var recentCrashes = [];
@@ -148,6 +151,34 @@ function tolerateUndeliveredMessages(worker) {
 }
 
 /**
+ * Tries the port in the primary, before there is any worker.
+ *
+ * A port that is taken, or that takes privileges this process does not have,
+ * is the same for every worker and no replacement is going to find it any
+ * different. Each worker used to run into it on its own and die of it, and
+ * the primary went on replacing them until it had seen enough to give up: the
+ * reason came out once per worker, and one more time. Here it comes out once
+ * (onError) and nothing is forked.
+ *
+ * The port could still be taken between this and the workers listening; they
+ * report it then with the same words, one each.
+ */
+function whenPortIsFree(callback) {
+  var probe = require('net').createServer();
+
+  probe.once('error', onError);
+  probe.once('listening', function () {
+    probe.close(callback);
+  });
+  // close() waits for the connections there are: one that made it in while
+  // the probe was listening would hold the start for as long as it stayed.
+  probe.on('connection', function (socket) {
+    socket.destroy();
+  });
+  probe.listen(port);
+}
+
+/**
  * Normalize a port into a number, string, or false.
  */
 
@@ -169,10 +200,15 @@ function normalizePort(val) {
 
 /**
  * Event listener for HTTP server "error" event.
+ *
+ * A worker does not listen itself: it asks the primary, and what comes back
+ * when the port cannot be had is the primary's failed `bind`, not a `listen`.
+ * Taken for an error of some other kind, it was thrown again and the worker
+ * died with a stack trace instead of the line below.
  */
 
 function onError(error) {
-  if (error.syscall !== 'listen') {
+  if (error.syscall !== 'listen' && error.syscall !== 'bind') {
     throw error;
   }
 

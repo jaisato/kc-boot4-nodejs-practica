@@ -17,9 +17,13 @@ desarrollo con recarga automática está `npm run dev`, que usa `node --watch`
 (Node 18.11 o superior; ya no hace falta _nodemon_).
 
 `bin/www` arranca un proceso principal que sólo supervisa y un *worker* por
-CPU, que son los que cargan la app y conectan con MongoDB. Si un worker muere
-se arranca otro en su lugar; si en un minuto mueren más workers de los que hay
-(falta `JWT_SECRET`, MongoDB no responde al arrancar, el puerto está ocupado…)
+CPU, que son los que cargan la app y conectan con MongoDB. Antes de crear
+ninguno prueba el puerto: si está ocupado o exige privilegios lo dice en una
+línea (`Port 3000 is already in use`) y sale con código 1, sin llegar a
+arrancar workers.
+
+Si un worker muere se arranca otro en su lugar; si en un minuto mueren más
+workers de los que hay (falta `JWT_SECRET`, MongoDB no responde al arrancar…)
 el fallo no es puntual y el proceso principal sale con código 1, para que lo
 reinicie quien lo supervise (systemd, Docker…) en vez de quedarse vivo sin
 nadie que atienda. Sin MongoDB al arrancar cada worker sale con un mensaje de
