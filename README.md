@@ -78,6 +78,16 @@ poder hacer nada (`SIGQUIT`, `SIGKILL`, falta de memoria), sus workers se
 enteran solos y se van; los que estaban arrancando ya no dejan una traza
 `write EPIPE` cada uno.
 
+La señal tiene que llegar a `bin/www`, y con `npm start` de por medio puede no
+hacerlo. `npm` lanza `sh -c "node ./bin/www"`, y con el `sh` de Debian y
+Ubuntu (dash) una señal enviada sólo al proceso `npm` termina `npm` y ese
+shell pero no pasa a `node`: el cluster sigue en marcha sin que nadie lo
+sepa. Ctrl+C no tiene ese problema, porque va a todo el grupo de procesos.
+Donde la señal va a un único proceso -`docker stop` se la manda al primero
+del contenedor- arranca `node ./bin/www` directamente (`CMD ["node",
+"bin/www"]`): con `npm start` de primer proceso el contenedor acaba con
+código 1 y sin parada ordenada.
+
 ## Base de datos inicial
 Al ejecutar **_npm run installDB_**, el script *install_db.js* carga los datos que inicializan el base de datos en MongoDB.
 
