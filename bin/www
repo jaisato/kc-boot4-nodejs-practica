@@ -20,6 +20,14 @@ var CRASH_WINDOW_MS = 60 * 1000;
 var STARTED = 'started';
 
 /**
+ * The signals the primary takes for a request to stop (superviseWorkers):
+ * the one a supervisor or `kill` sends, Ctrl+C in a terminal, and the
+ * terminal going away. Not SIGQUIT, which asks for more than a stop: for the
+ * process to end there and then, leaving a core dump behind.
+ */
+var STOP_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP'];
+
+/**
  * Get port from environment.
  */
 
@@ -96,6 +104,12 @@ if (cluster.isPrimary && clustered) {
   });
 
 } else {
+  // In time even for what went wrong with the channel before bin/www was
+  // reached: none of it is told until all of this has run.
+  if (cluster.isWorker) {
+    cluster.worker.on('error', leaveWithoutThePrimary);
+  }
+
   // Worker starting... It shares the counters only if the primary above is
   // what forked it; under another cluster manager, or with no cluster, it
   // keeps its own.
@@ -156,8 +170,8 @@ if (cluster.isPrimary && clustered) {
  *   replaced until it is back, but the ones still there get their connection
  *   again on their own.
  *
- * It also stops when it is asked to, with SIGTERM or SIGINT. The primary used
- * to do nothing about those: the signal ended it on the spot and its workers
+ * It also stops when it is asked to (STOP_SIGNALS). The primary used to do
+ * nothing about those signals: each ended it on the spot and its workers
  * were left to find out. The ones that were up did, and went. The ones still
  * starting found out when they asked to listen, and each died with a `write
  * EPIPE` stack trace after the process that had been stopped was gone. Now it
@@ -173,7 +187,7 @@ function superviseWorkers(numWorkers) {
   // Given up, or asked to stop: no worker is replaced from then on.
   var stopping = false;
 
-  ['SIGTERM', 'SIGINT'].forEach(function (signal) {
+  STOP_SIGNALS.forEach(function (signal) {
     // It goes on listening until endBySignal: a signal that came again with
     // nobody listening would end the primary half way through its workers.
     process.on(signal, function () {
@@ -208,7 +222,7 @@ function superviseWorkers(numWorkers) {
     // primary's own signal is. That is no worker to replace. So one that dies
     // of a signal the primary would stop for is not seen to there and then,
     // but once whatever came in with its death has been heard too.
-    if (signal === 'SIGTERM' || signal === 'SIGINT') {
+    if (STOP_SIGNALS.indexOf(signal) !== -1) {
       setImmediate(replaceOrGiveUp, worker, code, signal, hadStarted);
       return;
     }
@@ -313,7 +327,8 @@ function exitWithFailure() {
  * asked with, sent to itself now that nobody listens for it, the way it would
  * have ended had nobody ever been. That is what tells whoever started it - a
  * shell, npm, systemd - that it was stopped and did not fail; a shell reports
- * it as 128 plus the signal's number, 143 for SIGTERM and 130 for SIGINT.
+ * it as 128 plus the signal's number: 143 for SIGTERM, 130 for SIGINT, 129
+ * for SIGHUP.
  *
  * The first process of a container (pid 1) is not sent the signals it does
  * not handle, its own included: there the signal does nothing, and the
@@ -358,6 +373,32 @@ function tolerateUndeliveredMessages(worker) {
       worker.process.pid, err.code
     );
   });
+}
+
+/**
+ * In a worker: leaves, without a word, when it finds its primary gone.
+ *
+ * A primary that is asked to stop takes its workers along (superviseWorkers).
+ * One that is killed outright - SIGKILL, SIGQUIT, the kernel short of memory -
+ * gets to do nothing, and its workers are left to find out. The ones that are
+ * up do, and go: cluster ends a worker that loses its primary. The ones still
+ * starting found out when they had something to tell it, that they wanted to
+ * listen: it could not be written, cluster reports that as an 'error' event
+ * on the worker, and with nobody listening for it each died of an uncaught
+ * exception, with a `write EPIPE` stack trace, after the primary.
+ *
+ * Exit code 0, the one cluster ends a worker with when it loses its primary.
+ * Any other error on the worker stays as fatal as it was.
+ */
+function leaveWithoutThePrimary(err) {
+  var gone = err &&
+    (err.syscall === 'write' || err.code === 'ERR_IPC_CHANNEL_CLOSED');
+
+  if (!gone) {
+    throw err;
+  }
+
+  process.exit(0);
 }
 
 /**

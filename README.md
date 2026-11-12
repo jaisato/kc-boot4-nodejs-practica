@@ -62,14 +62,21 @@ arrancar cada worker sale con un mensaje de una línea en lugar de morir por un
 rechazo de promesa no gestionado.
 
 Una parada pedida no es un fallo. Con `SIGTERM` (`systemctl stop`, `docker
-stop`, `kill`) o `SIGINT` (Ctrl+C) el proceso principal detiene antes a sus
-workers -también a los que estaban arrancando, que antes le sobrevivían y
-morían con una traza `write EPIPE` cada uno- y termina por esa misma señal,
-como cualquier proceso que no la atiende: un shell ve 143 o 130, no un 1. Las
-peticiones en curso se cortan, igual que antes. Como primer proceso de un
-contenedor (pid 1), al que el núcleo no entrega las señales que no maneja, sale
-con ese mismo número; ahí antes ni se enteraba, y `docker stop` esperaba su
-plazo entero para matarlo (137).
+stop`, `kill`), `SIGINT` (Ctrl+C) o `SIGHUP` (se cierra el terminal, `kill
+-HUP`) el proceso principal detiene antes a sus workers -también a los que
+estaban arrancando, que antes le sobrevivían y morían con una traza `write
+EPIPE` cada uno- y termina por esa misma señal, como cualquier proceso que no
+la atiende: un shell ve 143, 130 o 129, no un 1. Las peticiones en curso se
+cortan, igual que antes. Como primer proceso de un contenedor (pid 1), al que
+el núcleo no entrega las señales que no maneja, sale con ese mismo número; ahí
+antes ni se enteraba, y `docker stop` esperaba su plazo entero para matarlo
+(137).
+
+`SIGQUIT` no se trata como parada: pide terminar en el acto dejando un
+volcado, y eso sigue haciendo. Cuando el proceso principal muere así, sin
+poder hacer nada (`SIGQUIT`, `SIGKILL`, falta de memoria), sus workers se
+enteran solos y se van; los que estaban arrancando ya no dejan una traza
+`write EPIPE` cada uno.
 
 ## Base de datos inicial
 Al ejecutar **_npm run installDB_**, el script *install_db.js* carga los datos que inicializan el base de datos en MongoDB.

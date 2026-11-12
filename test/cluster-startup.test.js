@@ -124,7 +124,8 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 // keeps what it and its workers write to stderr. `ended` turns true once the
 // process has gone and stderr has been closed by everything that held it, its
 // workers included: with its exit code in `code`, or the signal that ended it
-// in `signal`.
+// in `signal`. `outlived` tells whether anything of its process group was
+// still there at the moment the process itself had gone.
 function launch(args, env, command = process.execPath) {
     const launched = { output: '', ended: false };
     launched.process = spawn(command, args, {
@@ -144,6 +145,14 @@ function launch(args, env, command = process.execPath) {
         detached: true
     });
     launched.process.stderr.on('data', chunk => { launched.output += chunk; });
+    launched.process.once('exit', () => {
+        try {
+            process.kill(-launched.process.pid, 0);
+            launched.outlived = true;
+        } catch {
+            launched.outlived = false;
+        }
+    });
     launched.process.once('close', (code, signal) => {
         launched.code = code;
         launched.signal = signal;
@@ -435,13 +444,14 @@ test('failed starts do not end a cluster that still has a worker up', {
 });
 
 // Asked to stop - SIGTERM from whatever supervises it, SIGINT from whoever
-// has it in a terminal - the primary did nothing about it: it was gone at
-// once, and its workers were left to find out. The ones still starting did
-// when they asked to listen, and each died printing a `write EPIPE` stack
-// trace, after the process that had been stopped was no longer there.
+// has it in a terminal, SIGHUP when that terminal goes - the primary did
+// nothing about it: it was gone at once, and its workers were left to find
+// out. The ones still starting did when they asked to listen, and each died
+// printing a `write EPIPE` stack trace, after the process that had been
+// stopped was no longer there.
 //
 // The workers here are slow to start, so the signal finds them all at it.
-for (const signal of ['SIGTERM', 'SIGINT']) {
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
     test(`asked to stop with ${signal} while its workers are starting, bin/www takes them along, quietly`, async t => {
         const www = launch(['-e', SABOTAGE, BIN_WWW], { TEST_SLOW_START: '1' });
         t.after(() => stop(www));
@@ -453,6 +463,36 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
         // Ended by the signal, like a process that does nothing about it: a
         // stop that was asked for, and not exit code 1.
         assert.equal(www.signal, signal);
+        assert.equal(www.output, '');
+        // Along with it, and not after it: none of them outlived it.
+        assert.equal(www.outlived, false);
+    });
+}
+
+// A primary that is killed outright - SIGKILL, SIGQUIT, the kernel short of
+// memory - gets to do nothing about it, and neither is it for bin/www to
+// change what those mean. Its workers are left to find out, as they were. But
+// the ones still starting found out by dying of it: what they had to say to
+// the primary could not be written, and each printed a `write EPIPE` stack
+// trace on its way out.
+//
+// Killed with every worker forked, and killed with only the first: that one
+// has not got as far as running anything of bin/www's.
+for (const [when, sabotage] of [
+    ['with its workers starting', {}],
+    ['while it is still forking them', { TEST_SIGNAL_AT_FIRST_FORK: 'SIGKILL' }]
+]) {
+    test(`killed outright ${when}, the primary is not followed by a stack trace from each worker`, async t => {
+        const www = launch(['-e', SABOTAGE, BIN_WWW], { TEST_SLOW_START: '1', ...sabotage });
+        t.after(() => stop(www));
+
+        if (!sabotage.TEST_SIGNAL_AT_FIRST_FORK) {
+            await until(www, 'the workers being forked', () => workers(www).length === WORKERS);
+            www.process.kill('SIGKILL');
+        }
+
+        await until(www, 'bin/www and its workers ending', () => www.ended);
+        assert.equal(www.signal, 'SIGKILL');
         assert.equal(www.output, '');
     });
 }
@@ -496,7 +536,7 @@ test('asked to stop a second time while it is at it, bin/www still takes every w
 // their own, and the primary can hear of one of those deaths before it hears
 // its own signal. That is not a death to replace, nor one to say anything
 // about.
-for (const signal of ['SIGTERM', 'SIGINT']) {
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
     test(`asked to stop with ${signal} along with its workers, bin/www replaces none of them`, async t => {
         const www = launch(['-e', SABOTAGE, BIN_WWW], {
             TEST_SLOW_START: '1', TEST_SIGNAL_TO_A_WORKER_FIRST: signal
@@ -533,7 +573,7 @@ test('asked to stop, bin/www does not report the answers that the workers it sto
 
 // With the cluster serving the same stop was quiet already - workers that are
 // up leave on their own when their primary goes - and so it has to stay.
-for (const signal of ['SIGTERM', 'SIGINT']) {
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
     test(`asked to stop with ${signal} while serving, bin/www ends the same way`, async t => {
         const www = launch(['-e', SABOTAGE, BIN_WWW], { TEST_DATABASE_UP_TO: 'Infinity' });
         t.after(() => stop(www));
@@ -550,6 +590,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
         assert.equal(www.signal, signal);
         // Not a word more: no worker reported dead, none replaced.
         assert.equal(www.output, said);
+        assert.equal(www.outlived, false);
     });
 }
 
