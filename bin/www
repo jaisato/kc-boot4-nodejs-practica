@@ -59,8 +59,20 @@ try {
  * process that never serves a request - and made the primary die along with
  * every worker whenever that connection failed. The app is loaded by the
  * workers alone now.
+ *
+ * With --no-cluster there is no primary and there are no workers: this one
+ * process loads the app and serves. It is what `npm run dev` asks for.
+ * node --watch starts over what it runs when a file that process has loaded
+ * changes, and a primary that loads nothing of the app was never started
+ * over for a change in it. And the workers told of every module they loaded,
+ * the way node --watch has the process it runs do, down the channel of the
+ * cluster and to a primary that made nothing of it: enough to clog the
+ * channel, which the rate limiter's store reported in each of them as an
+ * error.
  */
-if (cluster.isPrimary) {
+var clustered = process.argv.indexOf('--no-cluster') === -1;
+
+if (cluster.isPrimary && clustered) {
   // `cluster.isMaster` is the deprecated spelling of the same flag.
   var numWorkers = typeof os.availableParallelism === 'function'
     ? os.availableParallelism()
@@ -85,7 +97,8 @@ if (cluster.isPrimary) {
 
 } else {
   // Worker starting... It shares the counters only if the primary above is
-  // what forked it; under another cluster manager it keeps its own.
+  // what forked it; under another cluster manager, or with no cluster, it
+  // keeps its own.
   require('../lib/rateLimitStore').useSharedStore();
 
   var app = require('../app');
@@ -98,7 +111,10 @@ if (cluster.isPrimary) {
    */
   server = http.createServer(app);
 
-  reportStarted();
+  // To the primary, when there is one.
+  if (cluster.isWorker) {
+    reportStarted();
+  }
 
   /**
    * Listen on provided port, on all network interfaces.

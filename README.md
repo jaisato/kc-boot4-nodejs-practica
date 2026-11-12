@@ -16,6 +16,16 @@ que funciona en un despliegue instalado con `npm install --omit=dev`. Para
 desarrollo con recarga automática está `npm run dev`, que usa `node --watch`
 (Node 18.11 o superior; ya no hace falta _nodemon_).
 
+`npm run dev` arranca la app en un solo proceso, sin cluster (`bin/www
+--no-cluster`), y se reinicia al cambiar cualquier fichero que la app cargue.
+Con cluster no servía para desarrollar: `node --watch` reinicia lo que lanza
+cuando cambia un fichero cargado por ese proceso, y lo que lanzaba era el
+proceso principal, que no carga nada de la app, así que tocar `app.js` o una
+ruta no reiniciaba nada. Además los workers escribían al arrancar errores del
+limitador que no lo eran (`ClusterMemoryStoreWorker… process.send() returned
+false`). `npm start` no cambia: sigue arrancando el cluster que se describe a
+continuación.
+
 `bin/www` arranca un proceso principal que sólo supervisa y un *worker* por
 CPU, que son los que cargan la app y conectan con MongoDB. Antes de crear
 ninguno comprueba la configuración (`lib/config.js`) y prueba el puerto: si

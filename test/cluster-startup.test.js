@@ -9,12 +9,14 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn, execFileSync } = require('node:child_process');
 const { randomBytes } = require('node:crypto');
+const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 
-const BIN_WWW = path.join(__dirname, '..', 'bin', 'www');
+const ROOT = path.join(__dirname, '..');
+const BIN_WWW = path.join(ROOT, 'bin', 'www');
 // The same count bin/www makes.
 const WORKERS = typeof os.availableParallelism === 'function'
     ? os.availableParallelism()
@@ -101,8 +103,11 @@ const SABOTAGE = `
         Date.now = () => now() + (ahead += 61000);
     }
 
-    // A database that answers, for the workers up to this one.
-    if (cluster.isWorker && cluster.worker.id <= Number(process.env.TEST_DATABASE_UP_TO)) {
+    // A database that answers, for the workers up to this one; a process that
+    // serves on its own, with no cluster, counts as the first.
+    const serving = cluster.isWorker ? cluster.worker.id
+        : process.argv.includes('--no-cluster') ? 1 : NaN;
+    if (serving <= Number(process.env.TEST_DATABASE_UP_TO)) {
         const mongoose = require(${JSON.stringify(require.resolve('mongoose'))});
         mongoose.connect = () => {
             process.nextTick(() => mongoose.connection.emit('open'));
@@ -115,13 +120,15 @@ const SABOTAGE = `
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-// Runs node with `args` in a process group of its own and keeps what it and its
-// workers write to stderr. `ended` turns true once the process has gone and
-// stderr has been closed by everything that held it, its workers included:
-// with its exit code in `code`, or the signal that ended it in `signal`.
-function launch(args, env) {
+// Runs node - or `command` - with `args` in a process group of its own and
+// keeps what it and its workers write to stderr. `ended` turns true once the
+// process has gone and stderr has been closed by everything that held it, its
+// workers included: with its exit code in `code`, or the signal that ended it
+// in `signal`.
+function launch(args, env, command = process.execPath) {
     const launched = { output: '', ended: false };
-    launched.process = spawn(process.execPath, args, {
+    launched.process = spawn(command, args, {
+        cwd: ROOT,
         env: {
             ...process.env,
             // Any port that is free: the workers of a cluster share it.
@@ -188,6 +195,20 @@ function workers(launched) {
         if (err.status !== 1) throw err;
     }
     return found.split('\n').filter(Boolean).map(Number);
+}
+
+// The process at the end of the line of children that starts with what was
+// launched. Of `npm run dev`, the app that node --watch is running just now.
+function lastOfTheLine(launched) {
+    const child = new Map();
+    for (const line of execFileSync('ps', ['-eo', 'ppid=,pid=,stat='], { encoding: 'utf8' }).split('\n')) {
+        const [parent, pid, state] = line.trim().split(/\s+/);
+        if (state && !state.startsWith('Z')) child.set(Number(parent), Number(pid));
+    }
+
+    let pid = launched.process.pid;
+    while (child.has(pid)) pid = child.get(pid);
+    return pid;
 }
 
 // How many workers have said they are listening, and of how many the primary
@@ -531,3 +552,50 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
         assert.equal(www.output, said);
     });
 }
+
+// With a cluster, node --watch is no use for developing: it starts over what
+// it runs when a file that process has loaded changes, and what it runs is a
+// primary that loads nothing of the app. Its workers, for their part, tell of
+// every module they load the way node --watch has them do, down the channel
+// of the cluster, to a primary that makes nothing of it: enough of that to
+// clog the channel, and the rate limiter's store complained of it in every
+// worker, with a stack trace. `npm run dev` runs the app with no cluster.
+test('with --no-cluster bin/www serves on its own, with no workers', async t => {
+    const www = launch(['-e', SABOTAGE, BIN_WWW, '--no-cluster'], { TEST_DATABASE_UP_TO: '1' });
+    t.after(() => stop(www));
+
+    await until(www, 'bin/www listening', () => listening(www) >= 1);
+    assert.equal(await failedLogin(www), 400);
+    assert.deepEqual(workers(www), []);
+});
+
+// What `npm run dev` runs, the way npm runs it - and with the node these tests
+// are run with for the one that it finds. Started over, the app listens on
+// another port: it is told to take any that is free, and the workers of a
+// cluster, however many say that they are listening, all say the same one.
+test('npm run dev starts the app over when one of its files changes, with no error to show', async t => {
+    const dev = launch(['-c', require('../package.json').scripts.dev], {
+        PATH: path.dirname(process.execPath) + path.delimiter + process.env.PATH
+    }, 'sh');
+    t.after(() => stop(dev));
+
+    const ports = () => new Set(dev.output.match(/Listening on port \d+/g)).size;
+    await until(dev, 'the app listening', () => ports() >= 1);
+    const first = lastOfTheLine(dev);
+
+    // Its date and nothing else. And again every so often for as long as it
+    // is that same process running: node --watch may not have got round to
+    // watching the file yet, and once it has started the app over there is
+    // only to wait, however long the app takes.
+    const file = path.join(ROOT, 'app.js');
+    let touched = -Infinity;
+    await until(dev, 'the app starting over', () => {
+        if (performance.now() - touched > 1000 && lastOfTheLine(dev) === first) {
+            fs.utimesSync(file, new Date(), new Date());
+            touched = performance.now();
+        }
+        return ports() >= 2;
+    });
+
+    assert.doesNotMatch(dev.output, /Error/);
+});
