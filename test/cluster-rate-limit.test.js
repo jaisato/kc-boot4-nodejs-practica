@@ -7,7 +7,6 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn, execFileSync } = require('node:child_process');
 const { randomBytes } = require('node:crypto');
-const { once } = require('node:events');
 const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
@@ -74,6 +73,24 @@ function stop(launched) {
     if (launched && !exited(launched)) {
         // The whole process group: the primary and its workers.
         process.kill(-launched.process.pid, 'SIGKILL');
+    }
+}
+
+// Waits until the kernel has finished with these processes, killed while their
+// parent was stopped. Nobody collects them then, so they stay as zombies, and a
+// zombie with no thread left to exit has let go of everything it had open - its
+// end of the pipe to the primary too. A connection of theirs closing does not
+// say as much: what a dying process had open is not let go of in any order one
+// can count on, and the connection can go first.
+async function released(pids) {
+    const deadline = Date.now() + 15000;
+    for (;;) {
+        const states = execFileSync('ps', ['-o', 'stat=', '-p', pids.join(',')], { encoding: 'utf8' })
+            .split('\n').map(state => state.trim()).filter(Boolean);
+        // `l` in the state: threads of it are still on their way out.
+        if (states.length === pids.length && states.every(state => /^Z[^l]*$/.test(state))) return;
+        if (Date.now() > deadline) throw new Error('the workers are still there: ' + states.join(' '));
+        await delay(10);
     }
 }
 
@@ -145,14 +162,11 @@ test('a worker that dies with a question to the primary pending does not take th
         // attempt: its question is in the pipe by now, unanswered.
         assert.equal(await failedLogin(www.port, agent), 500);
 
-        // That connection closing is the kernel being done with the worker,
-        // its end of the pipe included - until then an answer written to it
-        // still goes through.
-        const [connection] = Object.values(agent.freeSockets)
-            .concat(Object.values(agent.sockets)).flat();
-        const closed = connection.destroyed || once(connection, 'close');
+        // The primary goes on only when the kernel is done with the workers:
+        // until a worker's end of the pipe has been let go of, an answer
+        // written to it still goes through.
         for (const pid of workers) process.kill(pid, 'SIGKILL');
-        await closed;
+        await released(workers);
         process.kill(primary, 'SIGCONT');
 
         // Every worker is replaced, and the new ones serve.
