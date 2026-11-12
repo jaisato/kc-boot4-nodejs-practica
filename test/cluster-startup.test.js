@@ -1,9 +1,10 @@
 'use strict';
 // Starts the real bin/www in the ways it can fail to start - the port taken,
-// no JWT_SECRET, workers that die before they are up - and checks what that
-// leaves the operator with: a line saying why, exit code 1 and no process
-// behind. And that it does not give up on a cluster that is serving, and that
-// asked to stop it does, with nothing to say and no process behind either.
+// a setting missing or wrong, workers that die before they are up - and checks
+// what that leaves the operator with: a line saying why, exit code 1 and no
+// process behind. And that it does not give up on a cluster that is serving,
+// and that asked to stop it does, with nothing to say and no process behind
+// either.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn, execFileSync } = require('node:child_process');
@@ -253,37 +254,66 @@ test('with the port taken a worker of another cluster manager says so itself', a
     assert.equal(manager.output, `Port ${port} is already in use\n`);
 });
 
-// The secret tokens are signed with is asked for by lib/jwtAuth.js, which only
-// the workers load. So it was each worker that found it missing, loading the
-// app, and died of it with a stack trace, and the primary that went on
-// replacing them until it had seen enough: a trace per worker and one more,
-// for something that was known before the first of them was forked.
-const NO_JWT_SECRET = 'JWT_SECRET is not set. Generate one (for example: openssl rand -hex 32) ' +
-    'and export it before starting the app.\n';
+// What the app cannot start without having right is checked where it is used,
+// in code that only the workers load. So it was each worker that found a
+// setting missing or wrong, loading the app, and died of it with a stack
+// trace, and the primary that went on replacing them until it had seen enough:
+// a trace per worker and one more, for something that was known before the
+// first of them was forked.
+const MISCONFIGURED = [
+    ['without JWT_SECRET', { JWT_SECRET: undefined },
+        'JWT_SECRET is not set. Generate one (for example: openssl rand -hex 32) ' +
+        'and export it before starting the app.'],
+    ['with a TRUST_PROXY_HOPS that is not a whole number', { TRUST_PROXY_HOPS: '1.5' },
+        'TRUST_PROXY_HOPS must be a non-negative integer (the number of reverse ' +
+        'proxies in front of this app; 0 or unset means none). Got: "1.5"'],
+    ['with a PUBLIC_BASE_URL that is not a URL', { PUBLIC_BASE_URL: 'api.example.com' },
+        'PUBLIC_BASE_URL must be an absolute URL such as https://api.example.com ' +
+        '(the public origin the photo links are built on). Got: "api.example.com"'],
+    ['with a PUBLIC_BASE_URL that is not http', { PUBLIC_BASE_URL: 'ftp://api.example.com' },
+        'PUBLIC_BASE_URL must be an http or https URL. Got: "ftp://api.example.com"'],
+    ['with a PUBLIC_BASE_URL that carries a query', { PUBLIC_BASE_URL: 'https://api.example.com/?v=1' },
+        'PUBLIC_BASE_URL must not carry a query string or fragment. Got: ' +
+        '"https://api.example.com/?v=1"']
+];
 
-test('without JWT_SECRET bin/www says so once and exits with 1', async t => {
-    const www = launch([BIN_WWW], { JWT_SECRET: undefined });
+for (const [how, env, line] of MISCONFIGURED) {
+    test(`${how} bin/www says so once and exits with 1`, async t => {
+        const www = launch([BIN_WWW], env);
+        t.after(() => stop(www));
+
+        await until(www, 'bin/www ending', () => www.ended);
+        assert.equal(www.code, 1);
+        // One line and no more: nothing was forked to add its own.
+        assert.equal(www.output, `${line}\n`);
+    });
+
+    // Under another cluster manager there is no primary of bin/www's to have
+    // said it: the worker does, and leaves with the code the manager here
+    // passes on.
+    test(`${how} a worker of another cluster manager says so itself`, async t => {
+        const manager = launch(['-e', `
+            const cluster = require('node:cluster');
+            cluster.setupPrimary({ exec: process.argv[1], execArgv: [] });
+            cluster.fork().on('exit', code => { process.exitCode = code; });
+        `, BIN_WWW], env);
+        t.after(() => stop(manager));
+
+        await until(manager, 'the manager and its worker ending', () => manager.ended);
+        assert.equal(manager.code, 1);
+        assert.equal(manager.output, `${line}\n`);
+    });
+}
+
+// With more than one of them wrong, each is said: none has to be put right to
+// find out about the next.
+test('with several settings wrong bin/www says each once and exits with 1', async t => {
+    const www = launch([BIN_WWW], Object.assign({}, ...MISCONFIGURED.slice(0, 3).map(([, env]) => env)));
     t.after(() => stop(www));
 
     await until(www, 'bin/www ending', () => www.ended);
     assert.equal(www.code, 1);
-    // One line and no more: nothing was forked to add its own.
-    assert.equal(www.output, NO_JWT_SECRET);
-});
-
-// Under another cluster manager there is no primary of bin/www's to have said
-// it: the worker does, and leaves with the code the manager here passes on.
-test('without JWT_SECRET a worker of another cluster manager says so itself', async t => {
-    const manager = launch(['-e', `
-        const cluster = require('node:cluster');
-        cluster.setupPrimary({ exec: process.argv[1], execArgv: [] });
-        cluster.fork().on('exit', code => { process.exitCode = code; });
-    `, BIN_WWW], { JWT_SECRET: undefined });
-    t.after(() => stop(manager));
-
-    await until(manager, 'the manager and its worker ending', () => manager.ended);
-    assert.equal(manager.code, 1);
-    assert.equal(manager.output, NO_JWT_SECRET);
+    assert.equal(www.output, MISCONFIGURED.slice(0, 3).map(([, , line]) => `${line}\n`).join(''));
 });
 
 // Giving up, the primary used to exit there and then. The workers it had just
