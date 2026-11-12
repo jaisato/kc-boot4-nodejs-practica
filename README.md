@@ -16,14 +16,25 @@ que funciona en un despliegue instalado con `npm install --omit=dev`. Para
 desarrollo con recarga automática está `npm run dev`, que usa `node --watch`
 (Node 18.11 o superior; ya no hace falta _nodemon_).
 
+`npm run dev` arranca la app en un solo proceso, sin cluster (`bin/www
+--no-cluster`), y se reinicia al cambiar cualquier fichero que la app cargue.
+Con cluster no servía para desarrollar: `node --watch` reinicia lo que lanza
+cuando cambia un fichero cargado por ese proceso, y lo que lanzaba era el
+proceso principal, que no carga nada de la app, así que tocar `app.js` o una
+ruta no reiniciaba nada. Además los workers escribían al arrancar errores del
+limitador que no lo eran (`ClusterMemoryStoreWorker… process.send() returned
+false`). `npm start` no cambia: sigue arrancando el cluster que se describe a
+continuación.
+
 `bin/www` arranca un proceso principal que sólo supervisa y un *worker* por
 CPU, que son los que cargan la app y conectan con MongoDB. Antes de crear
-ninguno comprueba que está `JWT_SECRET` y prueba el puerto: si falta el
-secreto (`JWT_SECRET is not set. Generate one…`), o si el puerto está ocupado
-o exige privilegios (`Port 3000 is already in use`), lo dice en una línea y
-sale con código 1, sin llegar a arrancar workers. Si los workers los crea otro
-gestor (PM2 en modo cluster), es cada worker quien lo dice, con la misma línea
-y la misma salida.
+ninguno comprueba la configuración (`lib/config.js`) y prueba el puerto: si
+falta `JWT_SECRET` (`JWT_SECRET is not set. Generate one…`), si
+`TRUST_PROXY_HOPS` o `PUBLIC_BASE_URL` están mal formadas, o si el puerto está
+ocupado o exige privilegios (`Port 3000 is already in use`), lo dice en una
+línea -una por cada variable que esté mal- y sale con código 1, sin llegar a
+arrancar workers. Si los workers los crea otro gestor (PM2 en modo cluster),
+es cada worker quien lo dice, con las mismas líneas y la misma salida.
 
 Si un worker muere se arranca otro en su lugar, salvo que hacerlo sólo sirva
 para repetir el fallo. El proceso principal se rinde en dos casos:
@@ -32,8 +43,8 @@ para repetir el fallo. El proceso principal se rinde en dos casos:
   lo que hicieran los workers; cubre también al que arranca y cae al momento,
   una y otra vez.
 - **Fallan al arrancar más workers seguidos de los que hay y no queda ninguno
-  en marcha.** Es un arranque que no funciona (MongoDB no responde, una variable
-  mal formada), tarde lo que tarde cada worker en fallar. Un worker ha arrancado
+  en marcha.** Es un arranque que no funciona (MongoDB no responde, `MONGODB_URI`
+  mal escrita), tarde lo que tarde cada worker en fallar. Un worker ha arrancado
   cuando escucha y tiene su conexión con MongoDB: sin base de datos escucha
   igual, espera lo que diga `serverSelectionTimeoutMS` y muere, de modo que
   con esperas de un minuto o más el primer criterio no llegaba a saltar y el
@@ -51,14 +62,31 @@ arrancar cada worker sale con un mensaje de una línea en lugar de morir por un
 rechazo de promesa no gestionado.
 
 Una parada pedida no es un fallo. Con `SIGTERM` (`systemctl stop`, `docker
-stop`, `kill`) o `SIGINT` (Ctrl+C) el proceso principal detiene antes a sus
-workers -también a los que estaban arrancando, que antes le sobrevivían y
-morían con una traza `write EPIPE` cada uno- y termina por esa misma señal,
-como cualquier proceso que no la atiende: un shell ve 143 o 130, no un 1. Las
-peticiones en curso se cortan, igual que antes. Como primer proceso de un
-contenedor (pid 1), al que el núcleo no entrega las señales que no maneja, sale
-con ese mismo número; ahí antes ni se enteraba, y `docker stop` esperaba su
-plazo entero para matarlo (137).
+stop`, `kill`), `SIGINT` (Ctrl+C) o `SIGHUP` (se cierra el terminal, `kill
+-HUP`) el proceso principal detiene antes a sus workers -también a los que
+estaban arrancando, que antes le sobrevivían y morían con una traza `write
+EPIPE` cada uno- y termina por esa misma señal, como cualquier proceso que no
+la atiende: un shell ve 143, 130 o 129, no un 1. Las peticiones en curso se
+cortan, igual que antes. Como primer proceso de un contenedor (pid 1), al que
+el núcleo no entrega las señales que no maneja, sale con ese mismo número; ahí
+antes ni se enteraba, y `docker stop` esperaba su plazo entero para matarlo
+(137).
+
+`SIGQUIT` no se trata como parada: pide terminar en el acto dejando un
+volcado, y eso sigue haciendo. Cuando el proceso principal muere así, sin
+poder hacer nada (`SIGQUIT`, `SIGKILL`, falta de memoria), sus workers se
+enteran solos y se van; los que estaban arrancando ya no dejan una traza
+`write EPIPE` cada uno.
+
+La señal tiene que llegar a `bin/www`, y con `npm start` de por medio puede no
+hacerlo. `npm` lanza `sh -c "node ./bin/www"`, y con el `sh` de Debian y
+Ubuntu (dash) una señal enviada sólo al proceso `npm` termina `npm` y ese
+shell pero no pasa a `node`: el cluster sigue en marcha sin que nadie lo
+sepa. Ctrl+C no tiene ese problema, porque va a todo el grupo de procesos.
+Donde la señal va a un único proceso -`docker stop` se la manda al primero
+del contenedor- arranca `node ./bin/www` directamente (`CMD ["node",
+"bin/www"]`): con `npm start` de primer proceso el contenedor acaba con
+código 1 y sin parada ordenada.
 
 ## Base de datos inicial
 Al ejecutar **_npm run installDB_**, el script *install_db.js* carga los datos que inicializan el base de datos en MongoDB.

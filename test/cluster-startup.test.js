@@ -1,19 +1,22 @@
 'use strict';
 // Starts the real bin/www in the ways it can fail to start - the port taken,
-// no JWT_SECRET, workers that die before they are up - and checks what that
-// leaves the operator with: a line saying why, exit code 1 and no process
-// behind. And that it does not give up on a cluster that is serving, and that
-// asked to stop it does, with nothing to say and no process behind either.
+// a setting missing or wrong, workers that die before they are up - and checks
+// what that leaves the operator with: a line saying why, exit code 1 and no
+// process behind. And that it does not give up on a cluster that is serving,
+// and that asked to stop it does, with nothing to say and no process behind
+// either.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn, execFileSync } = require('node:child_process');
 const { randomBytes } = require('node:crypto');
+const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 
-const BIN_WWW = path.join(__dirname, '..', 'bin', 'www');
+const ROOT = path.join(__dirname, '..');
+const BIN_WWW = path.join(ROOT, 'bin', 'www');
 // The same count bin/www makes.
 const WORKERS = typeof os.availableParallelism === 'function'
     ? os.availableParallelism()
@@ -100,8 +103,11 @@ const SABOTAGE = `
         Date.now = () => now() + (ahead += 61000);
     }
 
-    // A database that answers, for the workers up to this one.
-    if (cluster.isWorker && cluster.worker.id <= Number(process.env.TEST_DATABASE_UP_TO)) {
+    // A database that answers, for the workers up to this one; a process that
+    // serves on its own, with no cluster, counts as the first.
+    const serving = cluster.isWorker ? cluster.worker.id
+        : process.argv.includes('--no-cluster') ? 1 : NaN;
+    if (serving <= Number(process.env.TEST_DATABASE_UP_TO)) {
         const mongoose = require(${JSON.stringify(require.resolve('mongoose'))});
         mongoose.connect = () => {
             process.nextTick(() => mongoose.connection.emit('open'));
@@ -114,13 +120,16 @@ const SABOTAGE = `
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-// Runs node with `args` in a process group of its own and keeps what it and its
-// workers write to stderr. `ended` turns true once the process has gone and
-// stderr has been closed by everything that held it, its workers included:
-// with its exit code in `code`, or the signal that ended it in `signal`.
-function launch(args, env) {
+// Runs node - or `command` - with `args` in a process group of its own and
+// keeps what it and its workers write to stderr. `ended` turns true once the
+// process has gone and stderr has been closed by everything that held it, its
+// workers included: with its exit code in `code`, or the signal that ended it
+// in `signal`. `outlived` tells whether anything of its process group was
+// still there at the moment the process itself had gone.
+function launch(args, env, command = process.execPath) {
     const launched = { output: '', ended: false };
-    launched.process = spawn(process.execPath, args, {
+    launched.process = spawn(command, args, {
+        cwd: ROOT,
         env: {
             ...process.env,
             // Any port that is free: the workers of a cluster share it.
@@ -136,6 +145,14 @@ function launch(args, env) {
         detached: true
     });
     launched.process.stderr.on('data', chunk => { launched.output += chunk; });
+    launched.process.once('exit', () => {
+        try {
+            process.kill(-launched.process.pid, 0);
+            launched.outlived = true;
+        } catch {
+            launched.outlived = false;
+        }
+    });
     launched.process.once('close', (code, signal) => {
         launched.code = code;
         launched.signal = signal;
@@ -187,6 +204,20 @@ function workers(launched) {
         if (err.status !== 1) throw err;
     }
     return found.split('\n').filter(Boolean).map(Number);
+}
+
+// The process at the end of the line of children that starts with what was
+// launched. Of `npm run dev`, the app that node --watch is running just now.
+function lastOfTheLine(launched) {
+    const child = new Map();
+    for (const line of execFileSync('ps', ['-eo', 'ppid=,pid=,stat='], { encoding: 'utf8' }).split('\n')) {
+        const [parent, pid, state] = line.trim().split(/\s+/);
+        if (state && !state.startsWith('Z')) child.set(Number(parent), Number(pid));
+    }
+
+    let pid = launched.process.pid;
+    while (child.has(pid)) pid = child.get(pid);
+    return pid;
 }
 
 // How many workers have said they are listening, and of how many the primary
@@ -253,37 +284,66 @@ test('with the port taken a worker of another cluster manager says so itself', a
     assert.equal(manager.output, `Port ${port} is already in use\n`);
 });
 
-// The secret tokens are signed with is asked for by lib/jwtAuth.js, which only
-// the workers load. So it was each worker that found it missing, loading the
-// app, and died of it with a stack trace, and the primary that went on
-// replacing them until it had seen enough: a trace per worker and one more,
-// for something that was known before the first of them was forked.
-const NO_JWT_SECRET = 'JWT_SECRET is not set. Generate one (for example: openssl rand -hex 32) ' +
-    'and export it before starting the app.\n';
+// What the app cannot start without having right is checked where it is used,
+// in code that only the workers load. So it was each worker that found a
+// setting missing or wrong, loading the app, and died of it with a stack
+// trace, and the primary that went on replacing them until it had seen enough:
+// a trace per worker and one more, for something that was known before the
+// first of them was forked.
+const MISCONFIGURED = [
+    ['without JWT_SECRET', { JWT_SECRET: undefined },
+        'JWT_SECRET is not set. Generate one (for example: openssl rand -hex 32) ' +
+        'and export it before starting the app.'],
+    ['with a TRUST_PROXY_HOPS that is not a whole number', { TRUST_PROXY_HOPS: '1.5' },
+        'TRUST_PROXY_HOPS must be a non-negative integer (the number of reverse ' +
+        'proxies in front of this app; 0 or unset means none). Got: "1.5"'],
+    ['with a PUBLIC_BASE_URL that is not a URL', { PUBLIC_BASE_URL: 'api.example.com' },
+        'PUBLIC_BASE_URL must be an absolute URL such as https://api.example.com ' +
+        '(the public origin the photo links are built on). Got: "api.example.com"'],
+    ['with a PUBLIC_BASE_URL that is not http', { PUBLIC_BASE_URL: 'ftp://api.example.com' },
+        'PUBLIC_BASE_URL must be an http or https URL. Got: "ftp://api.example.com"'],
+    ['with a PUBLIC_BASE_URL that carries a query', { PUBLIC_BASE_URL: 'https://api.example.com/?v=1' },
+        'PUBLIC_BASE_URL must not carry a query string or fragment. Got: ' +
+        '"https://api.example.com/?v=1"']
+];
 
-test('without JWT_SECRET bin/www says so once and exits with 1', async t => {
-    const www = launch([BIN_WWW], { JWT_SECRET: undefined });
+for (const [how, env, line] of MISCONFIGURED) {
+    test(`${how} bin/www says so once and exits with 1`, async t => {
+        const www = launch([BIN_WWW], env);
+        t.after(() => stop(www));
+
+        await until(www, 'bin/www ending', () => www.ended);
+        assert.equal(www.code, 1);
+        // One line and no more: nothing was forked to add its own.
+        assert.equal(www.output, `${line}\n`);
+    });
+
+    // Under another cluster manager there is no primary of bin/www's to have
+    // said it: the worker does, and leaves with the code the manager here
+    // passes on.
+    test(`${how} a worker of another cluster manager says so itself`, async t => {
+        const manager = launch(['-e', `
+            const cluster = require('node:cluster');
+            cluster.setupPrimary({ exec: process.argv[1], execArgv: [] });
+            cluster.fork().on('exit', code => { process.exitCode = code; });
+        `, BIN_WWW], env);
+        t.after(() => stop(manager));
+
+        await until(manager, 'the manager and its worker ending', () => manager.ended);
+        assert.equal(manager.code, 1);
+        assert.equal(manager.output, `${line}\n`);
+    });
+}
+
+// With more than one of them wrong, each is said: none has to be put right to
+// find out about the next.
+test('with several settings wrong bin/www says each once and exits with 1', async t => {
+    const www = launch([BIN_WWW], Object.assign({}, ...MISCONFIGURED.slice(0, 3).map(([, env]) => env)));
     t.after(() => stop(www));
 
     await until(www, 'bin/www ending', () => www.ended);
     assert.equal(www.code, 1);
-    // One line and no more: nothing was forked to add its own.
-    assert.equal(www.output, NO_JWT_SECRET);
-});
-
-// Under another cluster manager there is no primary of bin/www's to have said
-// it: the worker does, and leaves with the code the manager here passes on.
-test('without JWT_SECRET a worker of another cluster manager says so itself', async t => {
-    const manager = launch(['-e', `
-        const cluster = require('node:cluster');
-        cluster.setupPrimary({ exec: process.argv[1], execArgv: [] });
-        cluster.fork().on('exit', code => { process.exitCode = code; });
-    `, BIN_WWW], { JWT_SECRET: undefined });
-    t.after(() => stop(manager));
-
-    await until(manager, 'the manager and its worker ending', () => manager.ended);
-    assert.equal(manager.code, 1);
-    assert.equal(manager.output, NO_JWT_SECRET);
+    assert.equal(www.output, MISCONFIGURED.slice(0, 3).map(([, , line]) => `${line}\n`).join(''));
 });
 
 // Giving up, the primary used to exit there and then. The workers it had just
@@ -384,13 +444,14 @@ test('failed starts do not end a cluster that still has a worker up', {
 });
 
 // Asked to stop - SIGTERM from whatever supervises it, SIGINT from whoever
-// has it in a terminal - the primary did nothing about it: it was gone at
-// once, and its workers were left to find out. The ones still starting did
-// when they asked to listen, and each died printing a `write EPIPE` stack
-// trace, after the process that had been stopped was no longer there.
+// has it in a terminal, SIGHUP when that terminal goes - the primary did
+// nothing about it: it was gone at once, and its workers were left to find
+// out. The ones still starting did when they asked to listen, and each died
+// printing a `write EPIPE` stack trace, after the process that had been
+// stopped was no longer there.
 //
 // The workers here are slow to start, so the signal finds them all at it.
-for (const signal of ['SIGTERM', 'SIGINT']) {
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
     test(`asked to stop with ${signal} while its workers are starting, bin/www takes them along, quietly`, async t => {
         const www = launch(['-e', SABOTAGE, BIN_WWW], { TEST_SLOW_START: '1' });
         t.after(() => stop(www));
@@ -402,6 +463,36 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
         // Ended by the signal, like a process that does nothing about it: a
         // stop that was asked for, and not exit code 1.
         assert.equal(www.signal, signal);
+        assert.equal(www.output, '');
+        // Along with it, and not after it: none of them outlived it.
+        assert.equal(www.outlived, false);
+    });
+}
+
+// A primary that is killed outright - SIGKILL, SIGQUIT, the kernel short of
+// memory - gets to do nothing about it, and neither is it for bin/www to
+// change what those mean. Its workers are left to find out, as they were. But
+// the ones still starting found out by dying of it: what they had to say to
+// the primary could not be written, and each printed a `write EPIPE` stack
+// trace on its way out.
+//
+// Killed with every worker forked, and killed with only the first: that one
+// has not got as far as running anything of bin/www's.
+for (const [when, sabotage] of [
+    ['with its workers starting', {}],
+    ['while it is still forking them', { TEST_SIGNAL_AT_FIRST_FORK: 'SIGKILL' }]
+]) {
+    test(`killed outright ${when}, the primary is not followed by a stack trace from each worker`, async t => {
+        const www = launch(['-e', SABOTAGE, BIN_WWW], { TEST_SLOW_START: '1', ...sabotage });
+        t.after(() => stop(www));
+
+        if (!sabotage.TEST_SIGNAL_AT_FIRST_FORK) {
+            await until(www, 'the workers being forked', () => workers(www).length === WORKERS);
+            www.process.kill('SIGKILL');
+        }
+
+        await until(www, 'bin/www and its workers ending', () => www.ended);
+        assert.equal(www.signal, 'SIGKILL');
         assert.equal(www.output, '');
     });
 }
@@ -445,7 +536,7 @@ test('asked to stop a second time while it is at it, bin/www still takes every w
 // their own, and the primary can hear of one of those deaths before it hears
 // its own signal. That is not a death to replace, nor one to say anything
 // about.
-for (const signal of ['SIGTERM', 'SIGINT']) {
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
     test(`asked to stop with ${signal} along with its workers, bin/www replaces none of them`, async t => {
         const www = launch(['-e', SABOTAGE, BIN_WWW], {
             TEST_SLOW_START: '1', TEST_SIGNAL_TO_A_WORKER_FIRST: signal
@@ -482,7 +573,7 @@ test('asked to stop, bin/www does not report the answers that the workers it sto
 
 // With the cluster serving the same stop was quiet already - workers that are
 // up leave on their own when their primary goes - and so it has to stay.
-for (const signal of ['SIGTERM', 'SIGINT']) {
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
     test(`asked to stop with ${signal} while serving, bin/www ends the same way`, async t => {
         const www = launch(['-e', SABOTAGE, BIN_WWW], { TEST_DATABASE_UP_TO: 'Infinity' });
         t.after(() => stop(www));
@@ -499,5 +590,53 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
         assert.equal(www.signal, signal);
         // Not a word more: no worker reported dead, none replaced.
         assert.equal(www.output, said);
+        assert.equal(www.outlived, false);
     });
 }
+
+// With a cluster, node --watch is no use for developing: it starts over what
+// it runs when a file that process has loaded changes, and what it runs is a
+// primary that loads nothing of the app. Its workers, for their part, tell of
+// every module they load the way node --watch has them do, down the channel
+// of the cluster, to a primary that makes nothing of it: enough of that to
+// clog the channel, and the rate limiter's store complained of it in every
+// worker, with a stack trace. `npm run dev` runs the app with no cluster.
+test('with --no-cluster bin/www serves on its own, with no workers', async t => {
+    const www = launch(['-e', SABOTAGE, BIN_WWW, '--no-cluster'], { TEST_DATABASE_UP_TO: '1' });
+    t.after(() => stop(www));
+
+    await until(www, 'bin/www listening', () => listening(www) >= 1);
+    assert.equal(await failedLogin(www), 400);
+    assert.deepEqual(workers(www), []);
+});
+
+// What `npm run dev` runs, the way npm runs it - and with the node these tests
+// are run with for the one that it finds. Started over, the app listens on
+// another port: it is told to take any that is free, and the workers of a
+// cluster, however many say that they are listening, all say the same one.
+test('npm run dev starts the app over when one of its files changes, with no error to show', async t => {
+    const dev = launch(['-c', require('../package.json').scripts.dev], {
+        PATH: path.dirname(process.execPath) + path.delimiter + process.env.PATH
+    }, 'sh');
+    t.after(() => stop(dev));
+
+    const ports = () => new Set(dev.output.match(/Listening on port \d+/g)).size;
+    await until(dev, 'the app listening', () => ports() >= 1);
+    const first = lastOfTheLine(dev);
+
+    // Its date and nothing else. And again every so often for as long as it
+    // is that same process running: node --watch may not have got round to
+    // watching the file yet, and once it has started the app over there is
+    // only to wait, however long the app takes.
+    const file = path.join(ROOT, 'app.js');
+    let touched = -Infinity;
+    await until(dev, 'the app starting over', () => {
+        if (performance.now() - touched > 1000 && lastOfTheLine(dev) === first) {
+            fs.utimesSync(file, new Date(), new Date());
+            touched = performance.now();
+        }
+        return ports() >= 2;
+    });
+
+    assert.doesNotMatch(dev.output, /Error/);
+});
