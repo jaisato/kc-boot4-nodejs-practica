@@ -27,6 +27,28 @@ var port = normalizePort(process.env.PORT || '3000');
 var server;
 
 /**
+ * Refuse to start without the secret tokens are signed with.
+ *
+ * lib/jwtAuth.js throws when it is not there, and only the workers load it.
+ * So it was each worker that found out, loading the app, and died of it with
+ * a stack trace, and the primary went on replacing them until it had seen
+ * enough to give up: a trace per worker and one more, for something that was
+ * known before the first of them was forked. It is said here instead, once
+ * and in one line, by whichever process this is: the primary, which then
+ * forks nothing, or a worker that another cluster manager started.
+ *
+ * This and nothing else: whatever other reason the app has not to load is
+ * still thrown where it is found.
+ */
+if (!process.env.JWT_SECRET) {
+  console.error(
+    'JWT_SECRET is not set. Generate one (for example: openssl rand -hex 32) ' +
+    'and export it before starting the app.'
+  );
+  process.exit(1);
+}
+
+/**
  * Cluster configuration
  *
  * The primary only forks and supervises the workers. It used to require
@@ -98,7 +120,7 @@ if (cluster.isPrimary) {
  *   starts and dies at once, over and over.
  *
  * - More workers in a row than the cluster has die without having started,
- *   and none is up. That is a start that does not work (missing JWT_SECRET,
+ *   and none is up. That is a start that does not work (a malformed setting,
  *   database unreachable), however long each worker takes to fail at it. The
  *   minute above cannot see it when they take long: with no database a worker
  *   listens, waits for as long as serverSelectionTimeoutMS says and dies, and

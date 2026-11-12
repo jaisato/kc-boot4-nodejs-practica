@@ -1,8 +1,8 @@
 'use strict';
 // Starts the real bin/www in the ways it can fail to start - the port taken,
-// workers that die before they are up - and checks what that leaves the
-// operator with: a line saying why, exit code 1 and no process behind. And
-// that it does not give up on a cluster that is serving.
+// no JWT_SECRET, workers that die before they are up - and checks what that
+// leaves the operator with: a line saying why, exit code 1 and no process
+// behind. And that it does not give up on a cluster that is serving.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn, execFileSync } = require('node:child_process');
@@ -181,6 +181,39 @@ test('with the port taken a worker of another cluster manager says so itself', a
 
     await until(manager, 'the manager and its worker ending', () => manager.ended);
     assert.equal(manager.output, `Port ${port} is already in use\n`);
+});
+
+// The secret tokens are signed with is asked for by lib/jwtAuth.js, which only
+// the workers load. So it was each worker that found it missing, loading the
+// app, and died of it with a stack trace, and the primary that went on
+// replacing them until it had seen enough: a trace per worker and one more,
+// for something that was known before the first of them was forked.
+const NO_JWT_SECRET = 'JWT_SECRET is not set. Generate one (for example: openssl rand -hex 32) ' +
+    'and export it before starting the app.\n';
+
+test('without JWT_SECRET bin/www says so once and exits with 1', async t => {
+    const www = launch([BIN_WWW], { JWT_SECRET: undefined });
+    t.after(() => stop(www));
+
+    await until(www, 'bin/www ending', () => www.ended);
+    assert.equal(www.code, 1);
+    // One line and no more: nothing was forked to add its own.
+    assert.equal(www.output, NO_JWT_SECRET);
+});
+
+// Under another cluster manager there is no primary of bin/www's to have said
+// it: the worker does, and leaves with the code the manager here passes on.
+test('without JWT_SECRET a worker of another cluster manager says so itself', async t => {
+    const manager = launch(['-e', `
+        const cluster = require('node:cluster');
+        cluster.setupPrimary({ exec: process.argv[1], execArgv: [] });
+        cluster.fork().on('exit', code => { process.exitCode = code; });
+    `, BIN_WWW], { JWT_SECRET: undefined });
+    t.after(() => stop(manager));
+
+    await until(manager, 'the manager and its worker ending', () => manager.ended);
+    assert.equal(manager.code, 1);
+    assert.equal(manager.output, NO_JWT_SECRET);
 });
 
 // Giving up, the primary used to exit there and then. The workers it had just
