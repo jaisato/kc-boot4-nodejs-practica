@@ -2,7 +2,8 @@
 // Starts the real bin/www in the ways it can fail to start - the port taken,
 // no JWT_SECRET, workers that die before they are up - and checks what that
 // leaves the operator with: a line saying why, exit code 1 and no process
-// behind. And that it does not give up on a cluster that is serving.
+// behind. And that it does not give up on a cluster that is serving, and that
+// asked to stop it does, with nothing to say and no process behind either.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn, execFileSync } = require('node:child_process');
@@ -19,8 +20,9 @@ const WORKERS = typeof os.availableParallelism === 'function'
     : os.cpus().length;
 
 // Evaluated in front of bin/www, in the primary and - cluster starts them with
-// the same arguments - in every worker: how these tests make workers fail, and
-// how they give them what there is none of here, time and a database.
+// the same arguments - in every worker: how these tests make workers fail, how
+// they give them what there is none of here, time and a database, and how they
+// have the primary signalled at the very moment that a test is about.
 const SABOTAGE = `
     const cluster = require('node:cluster');
 
@@ -31,6 +33,63 @@ const SABOTAGE = `
         const primary = process.ppid;
         const nothing = new Int32Array(new SharedArrayBuffer(4));
         while (process.ppid === primary) Atomics.wait(nothing, 0, 0, 10);
+    }
+
+    // No worker gets as far as loading anything until its primary has gone: a
+    // start that lasts for as long as a test needs it to. They know the
+    // primary by its pid, written down for them here, so that one that comes
+    // to look when the primary has already gone does not wait for ever.
+    if (process.env.TEST_SLOW_START) {
+        if (cluster.isPrimary) {
+            process.env.TEST_PRIMARY = String(process.pid);
+        } else {
+            const nothing = new Int32Array(new SharedArrayBuffer(4));
+            while (process.ppid === Number(process.env.TEST_PRIMARY)) Atomics.wait(nothing, 0, 0, 10);
+        }
+    }
+
+    // The primary is sent this signal when it has forked its first worker and
+    // is about to fork the next: it sends it to itself.
+    if (cluster.isPrimary && process.env.TEST_SIGNAL_AT_FIRST_FORK) {
+        const fork = cluster.fork;
+        cluster.fork = function (...args) {
+            const worker = fork.apply(this, args);
+            if (worker.id === 1) process.kill(process.pid, process.env.TEST_SIGNAL_AT_FIRST_FORK);
+            return worker;
+        };
+    }
+
+    // The primary is sent this signal when it has stopped the first of its
+    // workers and is about to stop the next: it sends it to itself.
+    if (cluster.isPrimary && process.env.TEST_SIGNAL_AT_FIRST_STOP) {
+        cluster.once('fork', worker => {
+            const kill = worker.process.kill;
+            worker.process.kill = function (...args) {
+                const killed = kill.apply(this, args);
+                process.kill(process.pid, process.env.TEST_SIGNAL_AT_FIRST_STOP);
+                return killed;
+            };
+        });
+    }
+
+    // The primary hears of a stop the way it can when the signal is sent to
+    // the whole process group: the death of a worker first, its own signal
+    // after. Once it has its workers it sends this signal to the first, waits
+    // right there until that one has died of it, and sends itself the same.
+    if (cluster.isPrimary && process.env.TEST_SIGNAL_TO_A_WORKER_FIRST) {
+        cluster.once('fork', worker => {
+            const { execFileSync } = require('node:child_process');
+            const state = () => execFileSync('ps', ['-o', 'stat=', '-p', String(worker.process.pid)], { encoding: 'utf8' });
+            process.kill(worker.process.pid, process.env.TEST_SIGNAL_TO_A_WORKER_FIRST);
+            while (!/^Z[^l]*$/.test(state().trim())) { /* still dying */ }
+            process.kill(process.pid, process.env.TEST_SIGNAL_TO_A_WORKER_FIRST);
+        });
+    }
+
+    // The primary has something to tell every worker that dies, as it would
+    // have had one of them asked it a question with its last breath.
+    if (cluster.isPrimary && process.env.TEST_LATE_ANSWERS) {
+        cluster.on('exit', worker => worker.send('too late'));
     }
 
     // The primary's clock, a minute further on every time it is looked at:
@@ -57,7 +116,8 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // Runs node with `args` in a process group of its own and keeps what it and its
 // workers write to stderr. `ended` turns true once the process has gone and
-// stderr has been closed by everything that held it, its workers included.
+// stderr has been closed by everything that held it, its workers included:
+// with its exit code in `code`, or the signal that ended it in `signal`.
 function launch(args, env) {
     const launched = { output: '', ended: false };
     launched.process = spawn(process.execPath, args, {
@@ -76,7 +136,11 @@ function launch(args, env) {
         detached: true
     });
     launched.process.stderr.on('data', chunk => { launched.output += chunk; });
-    launched.process.once('close', code => { launched.code = code; launched.ended = true; });
+    launched.process.once('close', (code, signal) => {
+        launched.code = code;
+        launched.signal = signal;
+        launched.ended = true;
+    });
 
     // Were this test run killed, nothing would stop what it has launched. This
     // does, from a process group the test run does not take along with it: it
@@ -115,8 +179,14 @@ async function until(launched, what, condition) {
 
 // The workers a primary has right now.
 function workers(launched) {
-    return execFileSync('pgrep', ['-P', String(launched.process.pid)], { encoding: 'utf8' })
-        .split('\n').filter(Boolean).map(Number);
+    let found = '';
+    try {
+        found = execFileSync('pgrep', ['-P', String(launched.process.pid)], { encoding: 'utf8' });
+    } catch (err) {
+        // Exit status 1 is how pgrep says that there are none.
+        if (err.status !== 1) throw err;
+    }
+    return found.split('\n').filter(Boolean).map(Number);
 }
 
 // How many workers have said they are listening, and of how many the primary
@@ -312,3 +382,122 @@ test('failed starts do not end a cluster that still has a worker up', {
 
     assert.equal(await failedLogin(www), 400);
 });
+
+// Asked to stop - SIGTERM from whatever supervises it, SIGINT from whoever
+// has it in a terminal - the primary did nothing about it: it was gone at
+// once, and its workers were left to find out. The ones still starting did
+// when they asked to listen, and each died printing a `write EPIPE` stack
+// trace, after the process that had been stopped was no longer there.
+//
+// The workers here are slow to start, so the signal finds them all at it.
+for (const signal of ['SIGTERM', 'SIGINT']) {
+    test(`asked to stop with ${signal} while its workers are starting, bin/www takes them along, quietly`, async t => {
+        const www = launch(['-e', SABOTAGE, BIN_WWW], { TEST_SLOW_START: '1' });
+        t.after(() => stop(www));
+
+        await until(www, 'the workers being forked', () => workers(www).length === WORKERS);
+        www.process.kill(signal);
+
+        await until(www, 'bin/www and its workers ending', () => www.ended);
+        // Ended by the signal, like a process that does nothing about it: a
+        // stop that was asked for, and not exit code 1.
+        assert.equal(www.signal, signal);
+        assert.equal(www.output, '');
+    });
+}
+
+// The earliest the stop can find a worker to leave behind: one is forked and
+// the primary is still at forking the rest. Whatever it does about the signal
+// has to be in place before the first fork, not after the last.
+test('asked to stop while it is still forking its workers, bin/www takes along the ones it has', async t => {
+    const www = launch(['-e', SABOTAGE, BIN_WWW], {
+        TEST_SLOW_START: '1', TEST_SIGNAL_AT_FIRST_FORK: 'SIGTERM'
+    });
+    t.after(() => stop(www));
+
+    await until(www, 'bin/www and its workers ending', () => www.ended);
+    assert.equal(www.signal, 'SIGTERM');
+    assert.equal(www.output, '');
+});
+
+// And the signal can come again while the primary is at it: a `kill` that is
+// repeated, Ctrl+C pressed twice. It has to find the primary still listening.
+// Left to do what it does to a process that is not, it ends the primary half
+// way through its workers, and the ones it had not got to stay behind.
+test('asked to stop a second time while it is at it, bin/www still takes every worker along', {
+    skip: WORKERS < 2 && 'needs a worker that is yet to be stopped'
+}, async t => {
+    const www = launch(['-e', SABOTAGE, BIN_WWW], {
+        TEST_SLOW_START: '1', TEST_SIGNAL_AT_FIRST_STOP: 'SIGTERM'
+    });
+    t.after(() => stop(www));
+
+    await until(www, 'the workers being forked', () => workers(www).length === WORKERS);
+    www.process.kill('SIGTERM');
+
+    await until(www, 'bin/www and its workers ending', () => www.ended);
+    assert.equal(www.signal, 'SIGTERM');
+    assert.equal(www.output, '');
+});
+
+// A terminal's Ctrl+C is for the whole process group, and so is a `kill` with
+// the group for a target: the workers get the signal too and die of it on
+// their own, and the primary can hear of one of those deaths before it hears
+// its own signal. That is not a death to replace, nor one to say anything
+// about.
+for (const signal of ['SIGTERM', 'SIGINT']) {
+    test(`asked to stop with ${signal} along with its workers, bin/www replaces none of them`, async t => {
+        const www = launch(['-e', SABOTAGE, BIN_WWW], {
+            TEST_SLOW_START: '1', TEST_SIGNAL_TO_A_WORKER_FIRST: signal
+        });
+        t.after(() => stop(www));
+
+        await until(www, 'bin/www and its workers ending', () => www.ended);
+        assert.equal(www.signal, signal);
+        assert.equal(www.output, '');
+    });
+}
+
+// The primary answers what its workers ask it, and an answer that crosses with
+// the SIGKILL it has just sent the worker cannot be delivered. That is worth a
+// line when a worker dies on it (`a message could not be delivered`). It is
+// not when the primary is stopping the worker itself, or a stop with nothing
+// wrong with it ends, some of the times, with a line or two of those. When an
+// answer crosses is not for a test to decide, so here the primary has one for
+// every worker that dies - all but the last, whose death is the end of the
+// primary too.
+test('asked to stop, bin/www does not report the answers that the workers it stops do not get', {
+    skip: WORKERS < 2 && 'needs a worker to die before the last one does'
+}, async t => {
+    const www = launch(['-e', SABOTAGE, BIN_WWW], { TEST_SLOW_START: '1', TEST_LATE_ANSWERS: '1' });
+    t.after(() => stop(www));
+
+    await until(www, 'the workers being forked', () => workers(www).length === WORKERS);
+    www.process.kill('SIGTERM');
+
+    await until(www, 'bin/www and its workers ending', () => www.ended);
+    assert.equal(www.signal, 'SIGTERM');
+    assert.equal(www.output, '');
+});
+
+// With the cluster serving the same stop was quiet already - workers that are
+// up leave on their own when their primary goes - and so it has to stay.
+for (const signal of ['SIGTERM', 'SIGINT']) {
+    test(`asked to stop with ${signal} while serving, bin/www ends the same way`, async t => {
+        const www = launch(['-e', SABOTAGE, BIN_WWW], { TEST_DATABASE_UP_TO: 'Infinity' });
+        t.after(() => stop(www));
+
+        // Both: the primary can say that a worker has started before the
+        // worker itself has got to say that it is listening.
+        await until(www, 'the workers starting',
+            () => started(www) >= WORKERS && listening(www) >= WORKERS);
+        assert.equal(await failedLogin(www), 400);
+        const said = www.output;
+        www.process.kill(signal);
+
+        await until(www, 'bin/www and its workers ending', () => www.ended);
+        assert.equal(www.signal, signal);
+        // Not a word more: no worker reported dead, none replaced.
+        assert.equal(www.output, said);
+    });
+}
