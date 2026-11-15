@@ -32,3 +32,13 @@ test('without NODE_ENV the HTML error page carries no stack trace', async () => 
     const html = await response.text();
     assert.doesNotMatch(html, /at .*\(.*\.js:\d+/);
 });
+
+test('responses do not announce the framework', async () => {
+    const tags = await fetch(base + '/apiv1/tags');
+    assert.equal(tags.status, 200);
+    assert.equal(tags.headers.get('x-powered-by'), null);
+
+    const notFound = await fetch(base + '/apiv1/does-not-exist');
+    assert.equal(notFound.status, 404);
+    assert.equal(notFound.headers.get('x-powered-by'), null);
+});
