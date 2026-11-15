@@ -30,15 +30,18 @@
     "qs": "^6.16.1"
   },
   "//": [
-    "overrides.qs: express 4 and body-parser 1 pin qs to ~6.15, and 6.15.3 is the",
-    "last release of two advisories (array-limit bypass GHSA-x5fp-wj9c-mxmx, and",
-    "isBuffer DoS GHSA-4mjr-xmp4-gh2g) fixed in 6.16.0, which no express 4 release",
-    "requires yet. The alternative npm offers is `npm audit fix --force`, which",
-    "installs express 5 - a breaking change this app is not ready for. The query",
-    "parser is what every request goes through, so the patched line is forced for",
-    "every dependant instead. Remove this once `npm ls qs` stops reporting",
-    "\"overridden\", which means express and body-parser require 6.16 on their own.",
-    "The floor is 6.16.1: 6.16.0 still has the stringify DoS with arrayFormat",
-    "'comma' (GHSA-6pq8-jhm2-2vcw)."
+    "overrides.qs: express 4 and body-parser 1 used to pin qs to ~6.15, whose last",
+    "release has two advisories (array-limit bypass GHSA-x5fp-wj9c-mxmx, and isBuffer",
+    "DoS GHSA-4mjr-xmp4-gh2g) fixed in 6.16.0; 6.16.1 then fixed the stringify DoS",
+    "with arrayFormat 'comma' (GHSA-6pq8-jhm2-2vcw). express 4.22.3 and body-parser",
+    "1.20.9 require ~6.16.0 on their own now, which covers the first two, and the",
+    "third whenever the lock resolves 6.16.1 or later. The override stays for the",
+    "6.17 line, which every request's query string goes through: 6.17.0 and 6.17.1",
+    "harden the parser (an own __proto__ key copied as data, bracket-wrapped",
+    "prototype keys guarded at depth 0, arrayLimit counted on the elements of a",
+    "sparse array) and 6.16.2 did not take those fixes. `npm ls qs` reports",
+    "\"overridden\" because 6.17 is outside ~6.16. Remove the override once express",
+    "and body-parser require ~6.17 themselves; dropping it earlier goes back to the",
+    "6.16 line, which is fine for the advisories but not for those fixes."
   ]
 }
