@@ -126,7 +126,7 @@ Si el usuario no existe o la contraseña es errónea la API devuelve un **error*
 Servicio para listar los anuncios de artículos registrados en el sistema.
 Este servicio requiere de autenticación *(JSON web token)*.
 
-* **Entry point:** */apiv1/users/ads*
+* **Entry point:** */apiv1/ads*
 * **Autenticación:** el token se envía **en la cabecera**, no en la query string:
 
 	```
@@ -144,7 +144,7 @@ Este servicio requiere de autenticación *(JSON web token)*.
 	* **name:** String. _Busca los anuncios cuyo nombre de artículo empieza por **name**. Ejemplo: 'mac'_
 	* **tags:** String. *Busca los anuncios que pertenecen a los tags deseados (separados por coma o espacio). Ejemplo: mobile, work.*
 	* **minprice:** Float. *Busca los anuncios a partir del precio mínimo deseado. Ejemplo: 490.99*
-	* **maxprice:** Float. *Busca los anuncios a partir del precio máximo deseado. Ejemplo: 490.99*
+	* **maxprice:** Float. *Busca los anuncios hasta el precio máximo deseado. Ejemplo: 490.99*
 	* **onsale:** Boolean. *Busca los anuncios por tipo (en venta o búsqueda). Ejemplo: onsale: 1 (true)*
 	* **sort:** String. *Campos por los que ordenar (separados por coma o espacio), cada uno con `-` delante para orden descendente. Sólo se admiten los mismos campos que `fields`. Ejemplo: `-price,name`. Los empates se resuelven siempre por `_id`, en el sentido del último campo (`-price` ordena como `-price -_id`), para que paginar con `skip` no repita ni salte anuncios.*
 * **Resultado:** *objeto en formato JSON con el éxito de la petición (success) y los datos (data) o el error (error)*

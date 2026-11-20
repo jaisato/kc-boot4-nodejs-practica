@@ -50,6 +50,12 @@ if (trustProxyHops > 0) {
   app.set('trust proxy', trustProxyHops);
 }
 
+// Express adds "X-Powered-By: Express" to every response, error pages and
+// API errors included, which tells anyone probing the server which framework
+// (and so which advisories) to try. The Express security best practices start
+// by turning it off.
+app.disable('x-powered-by');
+
 // view engine setup
 app.set('views', path.join(__dirname, 'views'));
 app.set('view engine', 'ejs');
